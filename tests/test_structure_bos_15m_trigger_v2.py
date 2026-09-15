@@ -89,6 +89,25 @@ def test_v2_uses_closed_hour_context_and_15m_break_confirmation() -> None:
     )
 
 
+def test_partial_child_resets_parent_but_repeated_prepare_is_not_a_new_reset():
+    from vnedge.data.swings import SwingDetectConfig
+    from vnedge.strategy.structure_bos_1h import StructureBosParams, _add_structure_features
+    frame = _history()
+    bad = frame.index[frame.timestamp.dt.minute.eq(45)][-5]
+    frame.loc[bad, "data_quality"] = "partial"
+    expected_reset = frame.loc[bad, "timestamp"].floor("h") + pd.Timedelta(hours=1)
+    parents = _complete_hour_frame(frame)
+    for _ in range(2):
+        prepared = _add_structure_features(parents, SwingDetectConfig(),
+                                           StructureBosParams(), allow_price_only=True)
+        last = prepared.iloc[-1]
+        assert last.last_quality_reset_at == expected_reset.isoformat()
+        assert last.eligible_bars_since_reset == int((parents.timestamp >= expected_reset).sum())
+        assert last.confirmed_low_count == 0
+    # The quality row remains partial; observing it again never repairs truth.
+    assert frame.loc[bad, "data_quality"] == "partial"
+
+
 def test_v2_rejects_fire_when_bound_hour_context_disappears() -> None:
     strategy = StructureBos15mTriggerV2()
     context = _HourlyContext()

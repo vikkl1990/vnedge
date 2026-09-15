@@ -23,6 +23,7 @@ resolves the order from venue truth.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 import pandas as pd
@@ -33,6 +34,7 @@ from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import ManagedOrder, OrderState
 from vnedge.paper.paper_reconciliation import PaperReconciler
 from vnedge.paper.simulated_exchange import SimulatedExchange
+from vnedge.risk.cost_gate import CostGate
 from vnedge.risk.position_sizer import size_position
 from vnedge.risk.risk_manager import OrderIntent, PreTradeRiskGateway
 from vnedge.runtime.active_exit import (
@@ -78,11 +80,17 @@ class PaperRunner:
         exchange: SimulatedExchange,
         journal: DecisionJournal,
         on_bar=None,  # optional async hook(bar_index, ts) — pacing/snapshots
+        entry_cost_gate: CostGate | None = None,
+        require_canonical_truth: bool = False,
     ) -> None:
         self.strategy = strategy
         self.candles = candles
         self.config = config
         self.on_bar = on_bar
+        # Explicit opt-in for separately registered gated research replays.
+        # Frozen legacy replays keep their original semantics.
+        self.entry_cost_gate = entry_cost_gate
+        self.require_canonical_truth = require_canonical_truth
         self.gateway = gateway
         self.om = order_manager
         self.execution_context = ExecutionContext.from_runner_mode(
@@ -117,6 +125,37 @@ class PaperRunner:
         )
 
     # --- Helpers -----------------------------------------------------------------
+    def _entry_cost_evidence(self, sig: SignalIntent, ref_price: float) -> CostDecisionEvidence | None:
+        gate = self.entry_cost_gate
+        if gate is None:
+            return CostDecisionEvidence.not_evaluated("paper_runner")
+        payload = {
+            "strategy_id": self.strategy.strategy_id,
+            "symbol": self.config.symbol,
+            "arm_envelope": sig.decision_envelope.as_dict() if sig.decision_envelope else None,
+            "decision_id": sig.decision_envelope.decision_id if sig.decision_envelope else None,
+            "cost_profile_id": gate.profile.value,
+            "edge_model_id": sig.edge_model_id,
+        }
+        targets = [x for x in (sig.take_profit_price, *sig.take_profit_levels)
+                   if x is not None and math.isfinite(x)]
+        rooms = [(x - ref_price) / ref_price * 10_000 * (1 if sig.side == "long" else -1)
+                 for x in targets if ref_price > 0]
+        favorable = [x for x in rooms if x > 0]
+        if sig.expected_gross_edge_bps is None or not favorable:
+            self.journal.append("cost_rejected", {**payload, "reason":
+                "edge_estimate_missing" if sig.expected_gross_edge_bps is None else "no_favorable_target"})
+            return None
+        result = gate.evaluate(
+            signal_edge_bps=sig.expected_gross_edge_bps, side=sig.side, urgency="taker",
+            expected_holding_seconds=int(pd.Timedelta(self.config.timeframe).total_seconds()) * self.config.max_holding_bars,
+            symbol=self.config.symbol, current_funding_rate=0,
+            available_room_bps=max(favorable),
+        )
+        self.journal.append("cost_approved" if result.approved else "cost_rejected",
+                            {**payload, **result.model_dump(mode="json")})
+        return CostDecisionEvidence.from_result(result, profile=gate.profile.value) if result.approved else None
+
     def _set_quote(self, price: float) -> None:
         bid, ask = quote_from_price(price, self.config.spread_bps)
         self.exchange.set_quote(self.config.symbol, bid, ask)
@@ -325,7 +364,12 @@ class PaperRunner:
 
             # 2) fill last bar's signal at this bar's open
             if pending_signal is not None and plan is None and not parked:
-                intent = self._build_entry_intent(pending_signal, float(bar["open"]))
+                ref_price = float(bar["open"])
+                if self.entry_cost_gate is not None:
+                    bid, ask = quote_from_price(ref_price, cfg.spread_bps)
+                    ref_price = ask if pending_signal.side == "long" else bid
+                cost_evidence = self._entry_cost_evidence(pending_signal, ref_price)
+                intent = self._build_entry_intent(pending_signal, ref_price) if cost_evidence else None
                 if intent is not None:
                     decision_ts = pending_decision_ts or pd.Timestamp(ts)
                     if pending_signal.decision_envelope is None:
@@ -343,7 +387,7 @@ class PaperRunner:
                         continue
                     evidence = ExecutionEvidence.from_decision(
                         pending_signal.decision_envelope,
-                        cost_decision=CostDecisionEvidence.not_evaluated("paper_runner"),
+                        cost_decision=cost_evidence,
                     )
                     order = await self.execution_kernel.submit(
                         intent,
@@ -437,7 +481,7 @@ class PaperRunner:
                                     False,
                                 )
                             ),
-                            require_canonical_truth=False,
+                            require_canonical_truth=self.require_canonical_truth,
                         )
                     except (TypeError, ValueError) as exc:
                         self.journal.append(

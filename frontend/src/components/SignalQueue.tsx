@@ -15,7 +15,7 @@ export interface QueueRow {
   cost_profile_id: string | null; ml_probability: number | null; ml_status: string;
   outcome_basis: string; research_net_usd: number | null; booked_net_usd: number | null;
 }
-interface Source { lane: string; state: string; caught_up: boolean; invalid_records: number }
+interface Source { lane: string; state: string; caught_up: boolean; invalid_records: number; skipped_bytes?: number; resync_reason?: string }
 interface QueuePage {
   generated_at: string; last_event_at: string | null; revision: string;
   rows: QueueRow[]; next_cursor: string | null; sources: Source[];
@@ -125,6 +125,7 @@ export function SignalQueue() {
     </div>
     {query.isError && <p role="alert" className="mb-4 rounded border border-warn/30 bg-warn/5 p-3 text-xs text-warn">{changed ? "The queue changed while paging. Refresh latest to avoid duplicate or skipped rows." : "Queue read failed. Displayed data may be stale; refresh or wait for reconnection."}</p>}
     {sourceProblem && <p role="status" className="mb-4 text-xs text-warn">Some source records are unavailable, invalid, or still indexing. Missing evidence is not a zero or an approval.</p>}
+    {data?.sources.some(s => (s.skipped_bytes ?? 0) > 0) && <p role="status" className="mb-4 text-xs text-dim">Recent tail only: older journal bytes were skipped to catch up. Full journals remain unchanged; incomplete order chains cannot prove fills.</p>}
     <div className="overflow-x-auto rounded-lg border border-line/70">
       <table className="w-full min-w-[1060px] text-left text-xs">
         <thead className="bg-inset/70 text-[10px] uppercase tracking-widest text-dim"><tr>{["Time (decision close / record)", "Market / side", "Setup / clock", "Entry / stop", "Stage", "ML", "Outcome / reason", "Proof"].map(name => <th key={name} className="px-3 py-3">{name}</th>)}</tr></thead>

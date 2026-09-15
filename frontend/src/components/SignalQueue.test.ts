@@ -36,4 +36,18 @@ describe("signal queue presentation truth", () => {
     expect(html).not.toContain("69%");
     client.clear();
   });
+  it("discloses tail resync coverage without claiming full history", () => {
+    const client = new QueryClient();
+    client.setQueryData(["signal-queue", "limit=25&population=decisions"], {
+      generated_at: new Date().toISOString(), last_event_at: null, revision: "resync",
+      rows: [], next_cursor: null, sources: [{ lane: "lane", state: "ok", caught_up: true,
+        invalid_records: 0, skipped_bytes: 8500000, resync_reason: "backlog_tail_resync" }],
+      facets: {}, summary: { total: 0, decisions: 0, with_fills: 0, rejected: 0, identity_gaps: 0 },
+    });
+    const html = renderToStaticMarkup(createElement(QueryClientProvider, { client }, createElement(SignalQueue)));
+    expect(html).toContain("INDEX CURRENT");
+    expect(html).toContain("older journal bytes were skipped");
+    expect(html).toContain("incomplete order chains cannot prove fills");
+    client.clear();
+  });
 });

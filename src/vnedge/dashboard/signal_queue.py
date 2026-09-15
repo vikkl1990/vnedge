@@ -281,6 +281,7 @@ class SignalQueue:
                     db.execute("CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, lane TEXT, offset INTEGER, body TEXT)")
                     db.execute("CREATE INDEX IF NOT EXISTS events_lane ON events(lane, offset)")
                     db.execute("CREATE TABLE IF NOT EXISTS issues (lane TEXT PRIMARY KEY, invalid_records INTEGER)")
+                    db.execute("CREATE TABLE IF NOT EXISTS coverage (lane TEXT PRIMARY KEY, skipped_bytes INTEGER, reason TEXT)")
                     for lane in active[:32]:
                         statuses.append(self._ingest(db, lane))
                         events.extend(json.loads(row[0]) for row in db.execute(
@@ -301,6 +302,9 @@ class SignalQueue:
         prior_issues = db.execute("SELECT invalid_records FROM issues WHERE lane=?", (lane,)).fetchone()
         if prior_issues:
             status["invalid_records"] = prior_issues[0]
+        coverage = db.execute("SELECT skipped_bytes, reason FROM coverage WHERE lane=?", (lane,)).fetchone()
+        status.update(skipped_bytes=coverage[0] if coverage else 0,
+                      resync_reason=coverage[1] if coverage else None)
         if path.is_symlink():
             return {**status, "state": "symlink_refused"}
         try:
@@ -312,14 +316,26 @@ class SignalQueue:
                 if old and not reset:
                     handle.seek(max(0, old[1] - 128))
                     reset = hashlib.sha256(handle.read(min(128, old[1]))).hexdigest() != old[2]
+                # This is a recent-window display, not an archival consumer.
+                # After a quiet UI, replaying a large backlog per HTTP poll can
+                # leave the display hours behind while journals are healthy.
+                lagged = bool(old and not reset and stat.st_size - old[1] > self.read_bytes)
+                reset = reset or lagged
                 offset = old[1] if old and not reset else max(0, stat.st_size - self.read_bytes)
                 if reset:
                     db.execute("DELETE FROM events WHERE lane=?", (lane,))
                     status["invalid_records"] = 0
+                    previous_offset = old[1] if lagged else 0
                     handle.seek(offset)
                     if offset:
                         handle.readline(self.read_bytes)
                         offset = handle.tell()
+                    # Persist the coverage gap even on subsequent caught-up
+                    # polls. Evicted order ancestors must never prove fills.
+                    status["skipped_bytes"] = (status["skipped_bytes"] if lagged else 0) + max(0, offset - previous_offset)
+                    status["resync_reason"] = "backlog_tail_resync" if lagged else "recent_tail_bootstrap"
+                    db.execute("INSERT OR REPLACE INTO coverage VALUES(?,?,?)",
+                               (lane, status["skipped_bytes"], status["resync_reason"]))
                 handle.seek(offset)
                 chunk = handle.read(min(self.read_bytes, max(0, stat.st_size - offset)))
                 complete = chunk.rfind(b"\n") + 1

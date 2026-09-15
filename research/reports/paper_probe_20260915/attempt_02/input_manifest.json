@@ -1,0 +1,99 @@
+{
+  "minutes": {
+    "files": [
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-01.parquet",
+        "sha256": "73313c3d6903613ad2a670c986fc6aa8377f5fa46b26ed418bbfe2b4a1ca9836"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-02.parquet",
+        "sha256": "805ec8af7c831d4fa27cd8dd89f77d0b02157db9bd68b0692e0e1345f75db058"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-03.parquet",
+        "sha256": "cdadf2da96e88569e9109f07c1523e993a0f27791a95cf8ca96ef724a32cad60"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-04.parquet",
+        "sha256": "332505188be233d8786cada55d16c20cba0cfc402e3e0ddca53ef2c6025a6792"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-05.parquet",
+        "sha256": "95e94dc1ce53b4f340cce63a8f502465041755d0a4506fb32270aaf7523585db"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-06.parquet",
+        "sha256": "820366646c29ee0881f8993eadb18516b700ba6d8eefa16dffd59166ba5eb4b6"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-07.parquet",
+        "sha256": "c165274a1643af8466bc036b4f98d9a7bc01e8b4440725cf9194e2f73e06ca17"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-08.parquet",
+        "sha256": "ad310bc01e606351b8acaa55f3f3df67a57f784e8bd0693be422fcd854d29344"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-09.parquet",
+        "sha256": "2be15a525f553d0307f8ecb791aaf37cf5d9f71bccdd4b5005b528617f222946"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-10.parquet",
+        "sha256": "2276cee6827751e3c3d68ee421fedb52ef973778fe671c1b37c20399956982f8"
+      }
+    ],
+    "stored_minutes": 14394,
+    "expected_minutes": 14400,
+    "missing_minutes": 6,
+    "eligible_minutes": 14378,
+    "invalid_reason_counts": {
+      "coverage_quality": 16
+    }
+  },
+  "decisions": [
+    {
+      "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-01.parquet",
+      "sha256": "53513009592129d273b8ebfcd88a33fc08a5e87ccd128116ac736e19875f343c"
+    },
+    {
+      "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-02.parquet",
+      "sha256": "7bff4e3350f4190d08e746c23f769218a463386eed7b4637da6bb06dae960f50"
+    },
+    {
+      "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-03.parquet",
+      "sha256": "5fff6c97e19f20196b08e92e97abc84ebfcbba70c93d3cfaf9ca91ce0f52727d"
+    },
+    {
+      "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-04.parquet",
+      "sha256": "770da2b4a48242110571ed67d75cf3186d63a200d9f553136072c6516feea657"
+    },
+    {
+      "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-05.parquet",
+      "sha256": "2588e4d3d1828309001d576dcc4a6b452f39e34cd4fcf3bb1f1e24cbf458d717"
+    },
+    {
+      "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-06.parquet",
+      "sha256": "8c3de38612ca1a2b37426406aea0ac4ffd665a31f2e33bc53cb9ac3786b45795"
+    },
+    {
+      "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-07.parquet",
+      "sha256": "17ec4f95562faa6610accac9d57102ce2cc38352f03b1091eb1aac0915100e7f"
+    },
+    {
+      "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-08.parquet",
+      "sha256": "fb937d88dbe4469e6fdec706f3f25045199384ee2af3cdb3b2a42fd6fe413912"
+    },
+    {
+      "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-09.parquet",
+      "sha256": "9c7960fd56afe599086a2a628b7dbb43549756edb1d248efc90ef23768d2e775"
+    },
+    {
+      "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-10.parquet",
+      "sha256": "3aad3831c7a105d0cb72428a39665bac7dec34477b08d245bacc5b57c8041b4a"
+    }
+  ],
+  "eligible_5m": 2864,
+  "rejected": {
+    "decision_row_not_closed": 16
+  }
+}

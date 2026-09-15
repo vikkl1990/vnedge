@@ -221,6 +221,26 @@ def test_malformed_complete_lines_remain_visible_after_refresh(tmp_path):
         assert len(snap["rows"]) == 1
 
 
+def test_idle_index_resyncs_latest_tail_and_persists_coverage_gap(tmp_path):
+    path = tmp_path / "lane.journal.jsonl"
+    append(path, rec("order_intent", proof=True, client_order_id="old"),
+           rec("order_submitted", proof=True, client_order_id="old", second=1))
+    SignalQueue(tmp_path).snapshot(RUNTIME)
+    append(path, *(rec(second=i, skip_reason="backlog" + str(i)) for i in range(50)))
+    append(path, rec("order_fill_sync", proof=True, client_order_id="old", second=59,
+                     filled_quantity=1, state="FILLED"))
+    for _ in range(2):
+        snap = SignalQueue(tmp_path, read_bytes=4096).snapshot(RUNTIME)
+        source, = snap["sources"]
+        assert source["caught_up"] and source["remaining_bytes"] == 0
+        assert source["skipped_bytes"] > 0
+        assert source["resync_reason"] == "backlog_tail_resync"
+        assert snap["last_event_at"].endswith("59+00:00")
+        assert not any(row["has_fill"] for row in snap["rows"])
+        assert any(row["stage"] == "incomplete_order_chain" for row in snap["rows"])
+        assert not snap["history_complete"]
+
+
 def test_cursor_stable_until_revision_changes_and_filters_partition(tmp_path):
     append(tmp_path / "lane.journal.jsonl", *(rec(second=i, skip_reason=str(i)) for i in range(4)))
     snap = SignalQueue(tmp_path).snapshot(RUNTIME)

@@ -101,6 +101,51 @@ async def test_paper_round_trip_take_profit(tmp_path):
     assert "risk_decision" in kinds and "paper_exit" in kinds and "run_report" in kinds
 
 
+@pytest.mark.parametrize("edge", [None, -0.22, 100.0])
+async def test_opt_in_cost_gate_full_paper_path(tmp_path, edge):
+    """Synthetic plumbing proof only: the 100bps fixture is NOT edge evidence."""
+    from dataclasses import replace
+
+    from vnedge.data.bar_identity import bar_content_sha256
+    from vnedge.risk.cost_gate import CostGate, CostProfile
+    candles = make_candles([FLAT] * 6 + [(100., 107., 99.5, 106.5)] + [FLAT] * 3)
+    candles["candle_source"] = "canonical_tick_lake"
+    candles["is_closed"] = True
+    candles["data_quality"] = "ok"
+    candles["content_sha256"] = [bar_content_sha256(
+        r.to_dict(), open_time=r.timestamp.to_pydatetime(),
+        close_time=(r.timestamp + pd.Timedelta(hours=1)).to_pydatetime(),
+        source="canonical_tick_lake") for _, r in candles.iterrows()]
+    signal = replace(LONG, expected_gross_edge_bps=edge,
+                     edge_model_id="synthetic_test_not_edge" if edge is not None else None)
+    runner, exchange, _, journal = build_world(tmp_path, candles, OneShotStrategy(4, signal))
+    runner.entry_cost_gate = CostGate(CostProfile.DELTA_SCALP_V2)
+    runner.require_canonical_truth = True
+    report = await runner.run()
+    records = journal.read_all()
+    assert report.signals_generated == 1
+    if edge == 100:
+        assert report.fills == 2 and report.orders_submitted == 2
+        assert report.reconciliation_mismatches == 0 and exchange.get_positions() == []
+        assert any(r["kind"] == "cost_approved" for r in records)
+        entry = next(r["payload"] for r in records if r["kind"] == "order_intent")
+        assert entry["execution_evidence"]["cost_decision"]["approved"] is True
+    else:
+        assert report.fills == report.orders_submitted == 0
+        assert any(r["kind"] == "cost_rejected" for r in records)
+        assert not any(r["kind"] == "order_intent" for r in records)
+
+
+async def test_gated_replay_refuses_missing_canonical_identity(tmp_path):
+    from vnedge.risk.cost_gate import CostGate, CostProfile
+    runner, _, _, journal = build_world(tmp_path, make_candles([FLAT] * 10), OneShotStrategy(4, LONG))
+    runner.entry_cost_gate = CostGate(CostProfile.DELTA_SCALP_V2)
+    runner.require_canonical_truth = True
+    report = await runner.run()
+    assert report.signals_generated == report.orders_submitted == 0
+    assert any(r["kind"] == "entry_evidence_rejected" for r in journal.read_all())
+
+
 async def test_paper_ladder_captures_tp1_then_breakeven_stop(tmp_path):
     bars = (
         [FLAT] * 6
