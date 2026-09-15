@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import UTC, datetime
 
 import pytest
@@ -47,6 +48,43 @@ def test_no_setup_does_not_mint_decision_or_plan():
     assert row["primary_reason"] == "regime_flat"
     assert row["failed_gates"] == ["regime_flat", "structure_not_ready"]
     assert row["ml_probability"] is None
+
+
+def test_direct_decision_armed_payload_is_a_bound_decision_not_a_fill():
+    envelope = arm()
+    row, = fold(rec("decision_armed", **envelope))
+    assert row["decision_id"] == envelope["decision_id"]
+    assert row["stage"] == "armed"
+    assert row["population"] == "decisions"
+    assert row["evidence_status"] == "bound"
+    assert row["has_fill"] is False
+    assert row["booked_net_usd"] is None
+    assert row["performance_eligible"] is False
+
+
+def test_invalid_direct_arm_cannot_mint_identity_or_validate_matching_arm():
+    envelope = arm()
+    invalid = {**envelope, "side": "short"}
+    row, = fold(rec("decision_armed", **invalid))
+    assert row["decision_id"] is None
+    assert row["stage"] == "identity_gap"
+    rows = fold(rec("decision_armed", **envelope), rec("decision_armed", second=1, **invalid))
+    assert all(candidate["stage"] == "identity_gap" for candidate in rows)
+    assert all(not candidate["has_fill"] for candidate in rows)
+
+
+@pytest.mark.parametrize("kind", ["entry_quote_rejected", "entry_route_rejected"])
+def test_post_arm_entry_rejects_remain_linked_to_the_same_decision(kind):
+    envelope = arm()
+    row, = fold(
+        rec("decision_armed", **envelope),
+        rec(kind, second=1, decision_id=envelope["decision_id"],
+            arm_envelope=envelope, reason="entry route unavailable"),
+    )
+    assert row["decision_id"] == envelope["decision_id"]
+    assert row["stage"] == "rejected"
+    assert row["primary_reason"] == "entry route unavailable"
+    assert row["has_fill"] is False
 
 
 def test_unproven_fire_is_identity_gap():
@@ -184,6 +222,21 @@ def test_incremental_index_restart_torn_tail_and_duplicate_records(tmp_path):
     queue = SignalQueue(tmp_path)
     assert len(queue.snapshot(RUNTIME)["rows"]) == 2
     assert queue.snapshot({"lanes": []})["rows"] == []
+
+
+def test_parser_upgrade_reindexes_recent_arm_without_waiting_for_new_event(tmp_path):
+    path = tmp_path / "lane.journal.jsonl"
+    index = tmp_path / "projection.sqlite"
+    envelope = arm()
+    append(path, rec("decision_armed", **envelope))
+    first = SignalQueue(tmp_path, index_path=index).snapshot(RUNTIME)
+    assert first["rows"][0]["decision_id"] == envelope["decision_id"]
+    with sqlite3.connect(index) as db:
+        db.execute("DELETE FROM events")
+        db.execute("UPDATE meta SET value='1' WHERE key='projection_version'")
+    refreshed = SignalQueue(tmp_path, index_path=index).snapshot(RUNTIME)
+    assert refreshed["rows"][0]["decision_id"] == envelope["decision_id"]
+    assert page(refreshed, filters={})["summary"]["decisions"] == 1
 
 
 def test_rotation_and_rewrite_invalidate_cached_ancestors(tmp_path):

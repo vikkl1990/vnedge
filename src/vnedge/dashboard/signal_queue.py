@@ -25,9 +25,10 @@ from vnedge.execution.evidence import DecisionEnvelope
 from vnedge.risk.risk_manager import OrderIntent
 
 KINDS = frozenset({
-    "lane_eval", "candidate_evaluation", "shadow_intent", "shadow_outcome",
+    "lane_eval", "decision_armed", "candidate_evaluation", "shadow_intent", "shadow_outcome",
     "scalp_shadow_intent", "scalp_shadow_outcome", "cost_rejected",
-    "sizing_rejected", "entry_evidence_rejected", "shadow_entry_blocked",
+    "sizing_rejected", "entry_evidence_rejected", "entry_quote_rejected",
+    "entry_route_rejected", "shadow_entry_blocked",
     "risk_decision", "order_intent", "order_submitted", "order_acknowledged",
     "order_fill_sync", "order_resolved", "order_timeout_unknown",
     "order_rejected", "order_refused", "order_cancel", "order_ack_race_resolved", "reconciling", "live_paper_exit",
@@ -35,8 +36,10 @@ KINDS = frozenset({
 })
 RESEARCH = {"shadow_intent", "shadow_outcome", "scalp_shadow_intent", "scalp_shadow_outcome"}
 REJECTS = {"cost_rejected", "sizing_rejected", "entry_evidence_rejected",
+           "entry_quote_rejected", "entry_route_rejected",
            "shadow_entry_blocked", "order_rejected", "order_refused"}
 FILTERS = ("lane", "strategy_id", "symbol", "timeframe", "entry_clock", "mode", "stage", "population")
+PROJECTION_VERSION = "2"  # direct decision_armed envelopes and post-ARM rejects
 
 
 def digest(value: Any) -> str:
@@ -78,7 +81,11 @@ def normalize(lane: str, record: dict) -> dict | None:
     sig, ev, intent = obj(p.get("signal")), obj(p.get("execution_evidence")), obj(p.get("intent"))
     envelope = None
     error = None
-    for container in (p, sig, ev):
+    # The runner journals the ARM envelope itself as the decision_armed
+    # payload. Other lifecycle records carry it in arm_envelope. Treat the
+    # direct payload as proof only after the same strict identity validation.
+    containers = ({"arm_envelope": p}, p, sig, ev) if kind == "decision_armed" else (p, sig, ev)
+    for container in containers:
         if container.get("arm_envelope") is None:
             continue
         try:
@@ -282,6 +289,17 @@ class SignalQueue:
                     db.execute("CREATE INDEX IF NOT EXISTS events_lane ON events(lane, offset)")
                     db.execute("CREATE TABLE IF NOT EXISTS issues (lane TEXT PRIMARY KEY, invalid_records INTEGER)")
                     db.execute("CREATE TABLE IF NOT EXISTS coverage (lane TEXT PRIMARY KEY, skipped_bytes INTEGER, reason TEXT)")
+                    db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+                    version = db.execute("SELECT value FROM meta WHERE key='projection_version'").fetchone()
+                    if version is None or version[0] != PROJECTION_VERSION:
+                        # This SQLite file is a disposable journal projection.
+                        # A parser upgrade must re-read the bounded source tail;
+                        # otherwise an existing offset would hide newly indexed
+                        # ARM events until another decision happened.
+                        for table in ("sources", "events", "issues", "coverage"):
+                            db.execute(f"DELETE FROM {table}")
+                        db.execute("INSERT OR REPLACE INTO meta VALUES('projection_version', ?)",
+                                   (PROJECTION_VERSION,))
                     for lane in active[:32]:
                         statuses.append(self._ingest(db, lane))
                         events.extend(json.loads(row[0]) for row in db.execute(
