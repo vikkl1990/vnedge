@@ -527,3 +527,29 @@ async def test_reader_loop_consumes_stream_and_subscribes():
     assert client.funding_rate["BTCUSD"] == 0.0002
     assert True in connection_states
     assert connection_states[-1] is False
+
+
+async def test_timeout_coverage_ends_at_last_frame_not_detection_time():
+    states = []
+    observed = datetime(2026, 9, 15, 5, 18, 37, tzinfo=UTC)
+
+    class SilentWs(_FakeWs):
+        async def _gen(self):
+            yield json.dumps({"type": "heartbeat"})
+            client.last_transport_at = observed
+            await asyncio.sleep(10)
+
+    client = DeltaPublicWsClient(
+        ["BTCUSD"], connect=lambda _: SilentWs([]),
+        heartbeat=HeartbeatConfig(transport_silence_s=0.01),
+        on_connection_state=lambda connected, at: states.append((connected, at)),
+    )
+    await client.start()
+    try:
+        for _ in range(100):
+            if any(not connected for connected, _ in states):
+                break
+            await asyncio.sleep(0.005)
+        assert [(connected, at) for connected, at in states if not connected] == [(False, observed)]
+    finally:
+        await client.stop()

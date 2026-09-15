@@ -211,6 +211,8 @@ class DeltaPublicWsClient:
                 async with connect(self.url) as ws:
                     try:
                         self._heartbeat.reset(self._monotonic())
+                        self.last_transport_at = None
+                        connected_at = self._now()
                         # Enable the official server heartbeat immediately.  It is
                         # transport liveness only and never refreshes book/trade age.
                         await ws.send(json.dumps({"type": "enable_heartbeat"}))
@@ -227,7 +229,12 @@ class DeltaPublicWsClient:
                                 break
                             self._handle_raw(raw)
                     finally:
-                        self._notify_connection(False)
+                        # A silence timeout is detected AFTER the unobserved
+                        # interval started. Coverage ends at the last received
+                        # frame, not at timeout detection (possibly next minute).
+                        self._notify_connection(
+                            False, at=self.last_transport_at or connected_at,
+                        )
                 if not self._closed:
                     self.healthy = False
                     self._mark_error(ConnectionError("delta websocket stream ended"))
@@ -496,11 +503,11 @@ class DeltaPublicWsClient:
         self._backoff.reset()
         self.healthy = True
 
-    def _notify_connection(self, connected: bool) -> None:
+    def _notify_connection(self, connected: bool, *, at: datetime | None = None) -> None:
         if self.on_connection_state is None:
             return
         try:
-            self.on_connection_state(connected, self._now())
+            self.on_connection_state(connected, at or self._now())
         except Exception:
             logger.exception("Delta websocket connection-state callback failed")
 

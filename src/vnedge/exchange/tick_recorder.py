@@ -30,7 +30,7 @@ import math
 import os
 import time
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -63,6 +63,7 @@ _SKIP_LOG_SECONDS = 60.0
 # second so a slightly late predecessor is ordered before the canonical candle
 # builder sees it. This is bounded event-time ordering, not a data rewrite.
 _TRADE_REORDER_MS = 250
+DELTA_CAPTURE_CONTRACT = "delta_event_watermark_v2"
 _TRADE_FUTURE_SLACK_MS = 5_000
 _DELTA_NATIVE_IDS = {"delta_india", "delta", "deltaindia"}
 
@@ -115,7 +116,7 @@ def _write_trade_metrics(
     root: Path,
     *,
     exchange: str,
-    metrics: dict[str, dict[str, int | float]],
+    metrics: Mapping[str, Mapping[str, int | float | str]],
 ) -> None:
     path = root / "reports" / "trade_integrity" / f"{exchange}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -226,6 +227,13 @@ class TradeStreamCoverage:
             return
         self.connected = False
         self.gap_start = at
+
+    def mark_fault(self, at: datetime) -> None:
+        """A rejected print invalidates its minute, without inventing a disconnect."""
+        start = floor_time(_aware_utc(at), "1m")
+        interval = (start, start + timedelta(minutes=1))
+        if interval not in self.gaps:
+            self.gaps.append(interval)
 
     def quality(self, candle: Candle) -> tuple[str, bool]:
         intervals: list[tuple[datetime, datetime | None]] = [*self.gaps]
@@ -652,8 +660,10 @@ class CanonicalCandleSink:
             buyer_maker,
         )
 
-    def advance_time(self, now: datetime) -> None:
+    def advance_time(self, now: datetime, *, only_symbol: str | None = None) -> None:
         for symbol, pipeline in self.pipelines.items():
+            if only_symbol is not None and symbol != only_symbol:
+                continue
             try:
                 pipeline.advance_time(now)
             except Exception:
@@ -1480,6 +1490,10 @@ class DeltaTickRecorder:
         suffix = "-" + uuid4().hex
         self._trade_bufs = {s: _Buffer(root, exchange_id, s, "trades", shard_suffix=suffix,
             on_shard=lambda path, first, last, symbol=s: self._coverage_shard(symbol, path, first, last)) for s in self.symbols}
+        self._rejected_trade_bufs = {
+            s: _Buffer(root, exchange_id, s, "trades_rejected", shard_suffix=suffix)
+            for s in self.symbols
+        }
         self._book_bufs = {s: _Buffer(root, exchange_id, s, "book") for s in self.symbols}
         self._trade_reorder: dict[
             str, list[tuple[int, int, dict[str, Any]]]
@@ -1518,10 +1532,21 @@ class DeltaTickRecorder:
         if coverage is not None:
             coverage.shard(path, first, last)
 
-    def _coverage_fault(self, symbol: str, reason: str) -> None:
+    def _coverage_fault(
+        self, symbol: str, reason: str, *, event_ms: int | None = None,
+    ) -> None:
+        at = datetime.now(UTC)
         coverage = self._coverage.get(symbol)
         if coverage is not None:
-            coverage.fault(reason, datetime.now(UTC))
+            coverage.fault(reason, at)
+        if (self.candle_sink is not None and not self.books_only
+                and symbol in self.candle_sink.trade_coverage):
+            stream = self.candle_sink.trade_coverage[symbol]
+            stream.mark_fault(at)
+            if event_ms is not None:
+                # Do not rewrite already-published bars. Retain the fault and
+                # invalidate a still-forming affected bucket and receipt minute.
+                stream.mark_fault(datetime.fromtimestamp(event_ms / 1000, tz=UTC))
 
     @staticmethod
     def _epoch_ms() -> int:
@@ -1533,6 +1558,22 @@ class DeltaTickRecorder:
     def _safe_advance_boundary(now: datetime) -> datetime:
         """Candle clock bounded behind the trade reorder watermark."""
         return now - timedelta(milliseconds=_TRADE_REORDER_MS)
+
+    def _delta_event_boundary(self, symbol: str, now: datetime) -> datetime | None:
+        """Wall time cannot flush a quiet/stalled feed beyond observed trade time.
+
+        The per-message drain already uses max(event_ts)-250ms. The periodic
+        drain must use that SAME watermark; otherwise it releases the newest
+        print early and rejects its slightly older successor as a late print.
+        A heartbeat or another symbol is not evidence for this trade stream.
+        """
+        latest = self._max_seen_trade_ts_ms.get(symbol)
+        if latest is None:
+            return None
+        return min(
+            self._safe_advance_boundary(now),
+            datetime.fromtimestamp((latest - _TRADE_REORDER_MS) / 1000, tz=UTC),
+        )
 
     def _on_book(self, sym: str, buy: list, sell: list, msg: dict) -> None:
         if not buy or not sell:
@@ -1594,6 +1635,7 @@ class DeltaTickRecorder:
                 "exchange_timestamped": trade.get("exchange_timestamped", False),
                 "side": side,
                 "trade_id": trade_id,
+                "capture_contract_id": DELTA_CAPTURE_CONTRACT,
             }
             public_trade = PublicTrade(
                 exchange=self.exchange_id,
@@ -1695,7 +1737,14 @@ class DeltaTickRecorder:
             timestamp_ms, _, row = heapq.heappop(pending)
             if last_timestamp is not None and timestamp_ms < last_timestamp:
                 self._trade_metrics[sym]["trades_late_closed"] += 1
-                self._coverage_fault(sym, "reorder_late_drop")
+                self._coverage_fault(sym, "reorder_late_drop", event_ms=timestamp_ms)
+                # Preserve rejected normalized input separately: it must never
+                # enter ordinary replay, but losing it also destroys the audit
+                # evidence needed to investigate future recovery contracts.
+                self._rejected_trade_bufs[sym].add({
+                    **row, "rejection_reason": "reorder_late_drop",
+                    "canonical_eligible": False,
+                })
                 continue
             self.recorder_latency.record(
                 TRADE_INGEST_MS,
@@ -1721,7 +1770,11 @@ class DeltaTickRecorder:
                     )
                 except ValueError as exc:
                     self._trade_metrics[sym]["trades_late_closed"] += 1
-                    self._coverage_fault(sym, "closed_watermark_drop")
+                    self._coverage_fault(sym, "closed_watermark_drop", event_ms=timestamp_ms)
+                    self._rejected_trade_bufs[sym].add({
+                        **row, "rejection_reason": "closed_watermark_drop",
+                        "canonical_eligible": False,
+                    })
                     logger.warning(
                         "canonical Delta trade skipped: symbol=%s timestamp=%s reason=%s",
                         sym,
@@ -1735,10 +1788,11 @@ class DeltaTickRecorder:
         if last_timestamp is not None:
             self._last_trade_ts_ms[sym] = last_timestamp
 
-    def trade_metrics_snapshot(self) -> dict[str, dict[str, int | float]]:
+    def trade_metrics_snapshot(self) -> dict[str, dict[str, int | float | str]]:
         return {
             canonical_symbol(symbol): {
                 **counters,
+                "capture_contract_id": DELTA_CAPTURE_CONTRACT,
                 "seen_set_size": len(self._seen_trade_ids.get(symbol, ())),
                 "reorder_bound_ms": _TRADE_REORDER_MS,
                 "max_seen_event_ts_ms": self._max_seen_trade_ts_ms.get(symbol, 0),
@@ -1753,7 +1807,8 @@ class DeltaTickRecorder:
         }
 
     def _all_buffers(self):
-        return (*self._trade_bufs.values(), *self._book_bufs.values())
+        return (*self._trade_bufs.values(), *self._book_bufs.values(),
+                *self._rejected_trade_bufs.values())
 
     def streams_for(self, symbol: str) -> tuple[str, ...]:
         """Which streams this recorder owns for a symbol.
@@ -1807,22 +1862,31 @@ class DeltaTickRecorder:
                 # minute before prints from its final 250 ms were eligible to
                 # leave the heap, so otherwise-valid boundary trades were then
                 # rejected as belonging to an already-closed candle.
-                safe_boundary = self._safe_advance_boundary(wall_now)
-                through_ms = int(safe_boundary.timestamp() * 1000)
+                boundaries = {
+                    symbol: self._delta_event_boundary(symbol, wall_now)
+                    for symbol in self.symbols
+                }
                 for symbol in self.symbols:
-                    self._drain_delta_reorder(symbol, through_ms=through_ms)
+                    boundary = boundaries[symbol]
+                    if boundary is not None:
+                        self._drain_delta_reorder(
+                            symbol, through_ms=int(boundary.timestamp() * 1000)
+                        )
                 for buf in self._all_buffers():
                     if buf.should_flush(now):
                         buf.flush(now)
-                if self.candle_sink is not None and self.candle_sink.would_publish_on_advance(
-                    safe_boundary
-                ):
-                    for trade_buf in self._trade_bufs.values():
-                        trade_buf.flush(now)
                 if self.candle_sink is not None:
-                    self.candle_sink.advance_time(safe_boundary)
+                    for symbol, boundary in boundaries.items():
+                        if boundary is None:
+                            continue
+                        if self.candle_sink.would_publish_on_advance(boundary):
+                            self._trade_bufs[symbol].flush(now)
+                        self.candle_sink.advance_time(boundary, only_symbol=symbol)
                 for symbol, coverage in self._coverage.items():
-                    coverage.checkpoint(through_ms, self.trade_metrics_snapshot()[symbol], at=wall_now)
+                    boundary = boundaries[symbol]
+                    if boundary is not None:
+                        coverage.checkpoint(int(boundary.timestamp() * 1000),
+                            self.trade_metrics_snapshot()[symbol], at=wall_now)
                 # Daily rotation bounds verification work. Never carry proof
                 # across a process/day boundary by pretending it began earlier.
                 for symbol, coverage in tuple(self._coverage.items()):
