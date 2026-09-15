@@ -5,7 +5,7 @@
 This is a forward-only recorder correctness patch, not a scanner revision or
 an edge claim. Old candles, journals, golden artifacts and strategy IDs remain
 unchanged. New raw rows and recorder metrics identify the capture contract as
-`delta_event_watermark_v2`; replay comparisons must disclose the cutover rather
+`delta_event_watermark_v3`; replay comparisons must disclose the cutover rather
 than pooling both capture contracts as equivalent evidence.
 
 The VM's original coverage journal records a disconnect at
@@ -29,6 +29,10 @@ this patch does not assert that all drops were caused by the timer.
    per-symbol boundary: min(wall time - 250 ms, latest trade event - 250 ms).
    No observed trade means no advancement. A quiet symbol cannot borrow another
    symbol's clock or heartbeat. No empty bars are manufactured.
+   Each print must ALSO reside in the receive buffer for 250 ms before release.
+   An event-time threshold alone releases the first/newest member of an
+   arriving burst before its older siblings arrive. Unaged pending prints cap
+   candle advancement so the periodic publisher cannot overtake them.
 2. Disconnect coverage ends at the last observed transport frame, not the later
    timeout-detection timestamp. Stalled minutes remain unpublished until new
    trade evidence advances the clock and their quality is resolved.
@@ -56,6 +60,25 @@ prints and partial minutes must remain visible; changing the allowance requires
 a separately reviewed capture contract and replay, not a silent adjustment.
 
 ## Verification and rollout
+
+The first scoped rollout (`4613620`, capture contract v2) exposed residual
+out-of-order bursts in the new rejected-trade archive: at 15:19 UTC, 23 BTC
+rejects had 381–629 ms receipt age; 39 ETH rejects had 416–1470 ms receipt age.
+Those ages alone are not a measured reorder allowance. Inspection showed
+descending event timestamps inside bursts received within a few milliseconds.
+Contract v3 therefore enforces the existing 250 ms receive-buffer residence,
+without increasing the event-time disorder allowance. v2 remains frozen as its
+own short capture interval; its partial rows are not upgraded by v3.
+
+A bounded forensic replay of the received 15:18–15:20 UTC v2 archive combined
+accepted rows with `reorder_late_drop` quarantine rows, retaining duplicates and
+sorting stably by recorded receipt milliseconds. With the same 250 ms event
+window, adding the receive hold reduced simulated late drops from 33 to 0 on
+523 BTC rows and 44 to 0 on 640 ETH rows (three trailing prints left pending
+in each run). This supports the burst diagnosis, not venue completeness or a
+backtest result: cross-shard equal-millisecond receipt ordering is approximate,
+and the old archive cannot reveal trades never received. No candles were
+rewritten by this diagnostic.
 
 Regression coverage includes delayed predecessors after timer ticks,
 per-symbol isolation, timeout crossing a minute boundary, partial-bar exclusion,

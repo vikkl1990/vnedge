@@ -818,16 +818,20 @@ def test_delta_silent_symbol_cannot_borrow_wall_or_other_symbol_watermark(tmp_pa
     assert int(rec._delta_event_boundary("ETHUSD", wall).timestamp() * 1000) == DAY_TS + 89_750
 
 
-def test_delta_silence_keeps_minute_unpublished_until_gap_is_known(tmp_path):
+def test_delta_silence_keeps_minute_unpublished_until_gap_is_known(tmp_path, monkeypatch):
     rec = DeltaTickRecorder(["BTCUSD"], tmp_path, candle_root=tmp_path / "candles")
     base_ms = DAY_TS // 60_000 * 60_000
     start = datetime.fromtimestamp(base_ms / 1000, tz=UTC)
+    clock_ms = [base_ms]
+    monkeypatch.setattr(rec, "_epoch_ms", lambda: clock_ms[0])
     sink = rec.candle_sink
     sink.trade_coverage["BTCUSD"].gap_start = start
     rec._on_trade_connection_state(True, start)
     for offset in (1000, 30_000):
+        clock_ms[0] = base_ms + offset
         rec._on_trade("BTCUSD", {"ts_ms": base_ms + offset, "price": 100,
                                  "size": 1, "side": "buy"})
+    clock_ms[0] = base_ms + 61_000
     boundary = rec._delta_event_boundary("BTCUSD", start + timedelta(seconds=61))
     rec._drain_delta_reorder("BTCUSD", through_ms=int(boundary.timestamp() * 1000))
     sink.advance_time(boundary, only_symbol="BTCUSD")
@@ -836,16 +840,19 @@ def test_delta_silence_keeps_minute_unpublished_until_gap_is_known(tmp_path):
     # Timeout detection occurs next minute, coverage ends at last observed frame.
     rec._on_trade_connection_state(False, start + timedelta(seconds=30))
     rec._on_trade_connection_state(True, start + timedelta(seconds=70))
+    clock_ms[0] = base_ms + 71_000
     rec._on_trade("BTCUSD", {"ts_ms": base_ms + 71_000, "price": 101,
                              "size": 1, "side": "buy"})
+    clock_ms[0] = base_ms + 72_000
     boundary = rec._delta_event_boundary("BTCUSD", start + timedelta(seconds=72))
+    rec._drain_delta_reorder("BTCUSD", through_ms=int(boundary.timestamp() * 1000))
     sink.advance_time(boundary, only_symbol="BTCUSD")
     record = store.get_bar("BTCUSD", "1m", start)
     assert record.data_quality == "partial" and not record.coverage_ok
     assert store.get_bar("BTCUSD", "5m", start) is None
 
 
-def test_delta_rejected_print_invalidates_forming_bar_and_retains_quarantine(tmp_path):
+def test_delta_rejected_print_invalidates_forming_bar_and_retains_quarantine(tmp_path, monkeypatch):
     rec = DeltaTickRecorder(["BTCUSD"], tmp_path, candle_root=tmp_path / "candles")
     base_ms = DAY_TS // 60_000 * 60_000
     start = datetime.fromtimestamp(base_ms / 1000, tz=UTC)
@@ -853,8 +860,11 @@ def test_delta_rejected_print_invalidates_forming_bar_and_retains_quarantine(tmp
     sink.trade_coverage["BTCUSD"].gap_start = start
     rec._on_trade_connection_state(True, start)
     trade = {"price": 100, "size": 1, "side": "buy"}
+    receipt_ms = [base_ms + 10_000]
+    monkeypatch.setattr(rec, "_epoch_ms", lambda: receipt_ms[0])
     for offset in (2000, 3000, 1000, 4000):
         rec._on_trade("BTCUSD", {**trade, "ts_ms": base_ms + offset})
+        receipt_ms[0] += 500
     rec._drain_delta_reorder("BTCUSD", force=True)
     sink.advance_time(start + timedelta(minutes=1))
     for buf in rec._all_buffers():
@@ -867,7 +877,36 @@ def test_delta_rejected_print_invalidates_forming_bar_and_retains_quarantine(tmp
     assert rows.iloc[0].ts_ms == base_ms + 1000
     assert rows.iloc[0].rejection_reason == "reorder_late_drop"
     assert not rows.iloc[0].canonical_eligible
-    assert rows.iloc[0].capture_contract_id == "delta_event_watermark_v2"
+    assert rows.iloc[0].capture_contract_id == "delta_event_watermark_v3"
+
+
+def test_delta_holds_entire_received_burst_before_releasing_older_siblings(tmp_path, monkeypatch):
+    rec = DeltaTickRecorder(["BTCUSD"], tmp_path)
+    clock = [DAY_TS + 10_000]
+    monkeypatch.setattr(rec, "_epoch_ms", lambda: clock[0])
+    trade = {"price": 100, "size": 1, "side": "buy"}
+    # First a newer event, then siblings older by more than the event window.
+    for offset in (1000, 500, 100, 1500):
+        rec._on_trade("BTCUSD", {**trade, "ts_ms": DAY_TS + offset})
+    assert rec.trade_count == 0
+    clock[0] += 251
+    boundary = rec._delta_event_boundary("BTCUSD", datetime.fromtimestamp(clock[0] / 1000, tz=UTC))
+    rec._drain_delta_reorder("BTCUSD", through_ms=int(boundary.timestamp() * 1000))
+    assert rec.trade_count == 3
+    assert rec.trade_metrics_snapshot()["BTCUSD"]["trades_late_closed"] == 0
+    assert rec._trade_reorder["BTCUSD"][0][0] == DAY_TS + 1500
+
+
+def test_unaged_pending_print_prevents_candle_clock_overtaking_it(tmp_path, monkeypatch):
+    rec = DeltaTickRecorder(["BTCUSD"], tmp_path)
+    base_ms = DAY_TS // 60_000 * 60_000
+    clock_ms = base_ms + 60_100
+    monkeypatch.setattr(rec, "_epoch_ms", lambda: clock_ms)
+    for offset in (59_950, 61_000):
+        rec._on_trade("BTCUSD", {"ts_ms": base_ms + offset, "price": 100,
+                                 "size": 1, "side": "buy"})
+    boundary = rec._delta_event_boundary("BTCUSD", datetime.fromtimestamp(clock_ms / 1000, tz=UTC))
+    assert boundary < datetime.fromtimestamp((base_ms + 60_000) / 1000, tz=UTC)
 
 
 def test_fault_does_not_rewrite_an_already_published_bar(tmp_path):

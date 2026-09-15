@@ -266,8 +266,10 @@ def test_parser_faults_reach_coverage_without_new_fire_logic(tmp_path):
     assert faults == [("BTCUSD", "trade_parse_rejected"), ("BTCUSD", "trade_timestamp_rejected")]
 
 
-def test_real_recorder_publishes_persists_and_seals_same_minute(tmp_path):
+def test_real_recorder_publishes_persists_and_seals_same_minute(tmp_path, monkeypatch):
     rec = DeltaTickRecorder(["BTCUSD"], tmp_path, candle_root=tmp_path / "candles")
+    receipt_ms = [int(START.timestamp() * 1000) + 2000]
+    monkeypatch.setattr(rec, "_epoch_ms", lambda: receipt_ms[0])
     proof = ForwardCoverage(
         tmp_path, tmp_path / "candles", "BTCUSD", started_at=START - timedelta(minutes=1)
     )
@@ -278,6 +280,7 @@ def test_real_recorder_publishes_persists_and_seals_same_minute(tmp_path):
         rec._client._handle_trade(
             "BTCUSD", {"p": "100", "s": 3, "r": "m", "t": raw_row(i)["ts_ms"] * 1000, "id": str(i)}
         )
+    receipt_ms[0] = int(CLOSE.timestamp() * 1000)
     rec._drain_delta_reorder("BTCUSD", through_ms=int(CLOSE.timestamp() * 1000))
     rec._trade_bufs["BTCUSD"].flush(1)
     rec.candle_sink.advance_time(CLOSE)

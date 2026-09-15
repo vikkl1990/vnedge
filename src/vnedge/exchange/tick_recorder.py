@@ -63,7 +63,7 @@ _SKIP_LOG_SECONDS = 60.0
 # second so a slightly late predecessor is ordered before the canonical candle
 # builder sees it. This is bounded event-time ordering, not a data rewrite.
 _TRADE_REORDER_MS = 250
-DELTA_CAPTURE_CONTRACT = "delta_event_watermark_v2"
+DELTA_CAPTURE_CONTRACT = "delta_event_watermark_v3"
 _TRADE_FUTURE_SLACK_MS = 5_000
 _DELTA_NATIVE_IDS = {"delta_india", "delta", "deltaindia"}
 
@@ -1570,10 +1570,18 @@ class DeltaTickRecorder:
         latest = self._max_seen_trade_ts_ms.get(symbol)
         if latest is None:
             return None
-        return min(
+        boundary = min(
             self._safe_advance_boundary(now),
             datetime.fromtimestamp((latest - _TRADE_REORDER_MS) / 1000, tz=UTC),
         )
+        # A timestamp-ordered burst may still be arriving. Do not close a
+        # candle containing a pending print that has not spent 250ms in RAM.
+        pending = self._trade_reorder[symbol]
+        receipt_cutoff = int(now.timestamp() * 1000) - _TRADE_REORDER_MS
+        unaged = [ts for ts, _, row in pending if row["received_ts_ms"] > receipt_cutoff]
+        if unaged:
+            boundary = min(boundary, datetime.fromtimestamp((min(unaged) - 1) / 1000, tz=UTC))
+        return boundary
 
     def _on_book(self, sym: str, buy: list, sell: list, msg: dict) -> None:
         if not buy or not sell:
@@ -1734,6 +1742,10 @@ class DeltaTickRecorder:
         last_timestamp = self._last_trade_ts_ms.get(sym)
         buf = self._trade_bufs[sym]
         while pending and (force or (through_ms is not None and pending[0][0] <= through_ms)):
+            if not force and pending[0][2]["received_ts_ms"] > self._epoch_ms() - _TRADE_REORDER_MS:
+                # max(event_ts)-250ms alone does not buffer an arriving burst:
+                # its first, newest print can release before older siblings.
+                break
             timestamp_ms, _, row = heapq.heappop(pending)
             if last_timestamp is not None and timestamp_ms < last_timestamp:
                 self._trade_metrics[sym]["trades_late_closed"] += 1
