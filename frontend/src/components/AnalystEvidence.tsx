@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiGet } from "../api";
 import type { AnalystMarket } from "./CryptoAnalyst";
 import { AnalystContext, type MarketStage, type Fundamentals } from "./AnalystContext";
+import { AnalystStageOutcomes } from "./AnalystStageOutcomes";
 
 export interface PublicObservation {
   state: string; source?: string; evidence_id?: string; venue_ts?: string;
@@ -94,11 +95,12 @@ export function AnalystEvidence({ exchange, symbol, source = "canonical" }: { ex
   return <section className="ca-evidence-panel" aria-label="Multi-timeframe analyst">
     <div className="ca-between"><h3>Explore {symbol}</h3><span className="ca-overline">EVIDENCE FIRST</span></div>
     <div className="ca-evidence-tabs" role="tablist" aria-label="Evidence views">
-      {[["context", "Stage & fundamentals"], ["dossier", "Multi-timeframe"], ["ask", "Ask the evidence"], ["history", "History & changes"]].map(([id, name]) => <button role="tab" aria-selected={tab === id} key={id} onClick={() => setTab(id)}>{name}</button>)}
+      {[["context", "Stage & fundamentals"], ["dossier", "Multi-timeframe"], ["ask", "Ask the evidence"], ["history", "History & changes"], ["outcomes", "Scanner outcomes"]].map(([id, name]) => <button role="tab" aria-selected={tab === id} key={id} onClick={() => setTab(id)}>{name}</button>)}
     </div>
     {dossier.isError && <p className="ca-warning" role="alert">Evidence connection unavailable. Any previous dossier is historical.</p>}
     {tab === "dossier" && <DossierFacts data={dossier.data} />}
     {tab === "context" && <AnalystContext stages={dossier.data?.stages} fundamentals={dossier.data?.fundamentals} />}
+    {tab === "outcomes" && <AnalystStageOutcomes exchange={exchange} symbol={symbol} />}
     {tab === "ask" && <div className="ca-ask">
       <p>Local evidence answers · no paid AI model · no orders</p>
       <div className="ca-question-presets">{["What stage is this market in?", "Show fundamentals, revenue and emissions", "What supports or contradicts the trend?", "Show VWAP and reference levels", "What do funding, open interest and flow show?", "What evidence is missing?"].map(q => <button key={q} onClick={() => { setQuestion(q); setAsked(q); }}>{q}</button>)}</div>

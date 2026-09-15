@@ -255,8 +255,10 @@ class SignalQueue:
     Bootstraps from the latest bytes, then tails complete lines. Never claims
     full-history coverage; evicted ancestors leave descendants unproven.
     """
-    def __init__(self, root: Path | None, *, read_bytes: int = 524288, max_events: int = 2000) -> None:
+    def __init__(self, root: Path | None, *, read_bytes: int = 524288, max_events: int = 2000,
+                 index_path: Path | None = None) -> None:
         self.root = Path(root) if root else None
+        self.index_path = index_path
         self.read_bytes, self.max_events = read_bytes, max_events
         self.lock = threading.Lock()
         self.cached: dict | None = None
@@ -274,7 +276,7 @@ class SignalQueue:
                 return self.cached
             statuses, events = [], []
             if self.root and self.root.is_dir() and active:
-                with closing(sqlite3.connect(self.root / ".dashboard_signal_queue_v1.sqlite", timeout=2)) as db, db:
+                with closing(sqlite3.connect(self.index_path or self.root / ".dashboard_signal_queue_v1.sqlite", timeout=2)) as db, db:
                     db.execute("CREATE TABLE IF NOT EXISTS sources (lane TEXT PRIMARY KEY, inode TEXT, offset INTEGER, anchor TEXT)")
                     db.execute("CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, lane TEXT, offset INTEGER, body TEXT)")
                     db.execute("CREATE INDEX IF NOT EXISTS events_lane ON events(lane, offset)")

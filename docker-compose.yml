@@ -101,6 +101,7 @@ services:
       - ./logs:/app/logs
       - ./data:/app/data
       - ./data/analyst_official:/app/data/analyst_official:ro
+      - ./data/analyst_stage:/app/data/analyst_stage:ro
       - ./research/live_research:/app/research/live_research:ro
       - ./research/evidence_bundles:/app/research/evidence_bundles:ro
     logging:
@@ -578,6 +579,33 @@ services:
     mem_limit: 400m
     healthcheck:
       test: ["CMD", "python", "-c", "from datetime import UTC,datetime; from vnedge.dashboard.analyst_history import DEFAULT_PATH; from vnedge.dashboard.analyst_store import AnalystStore,utc; n=datetime.now(UTC); r=AnalystStore(DEFAULT_PATH).read('collector','delta_india',now=n)[0]['body']; assert (n-utc(r['generated_at'])).total_seconds()<180"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+
+  analyst-stage-outcomes:
+    profiles: ["analyst"]
+    build: .
+    restart: unless-stopped
+    user: "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    read_only: true
+    network_mode: none
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    command: ["python", "-m", "vnedge.research.stage_outcomes"]
+    volumes:
+      - ./logs/paper_trials:/app/logs/paper_trials:ro
+      - ./data/analyst_official:/app/data/analyst_official:ro
+      - ./data/analyst_stage:/app/data/analyst_stage
+    tmpfs: ["/tmp:size=32m"]
+    mem_limit: 512m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "python", "-c", "from datetime import UTC,datetime; from vnedge.research.stage_outcomes import report,DEFAULT_PATH; assert report(DEFAULT_PATH,'BTCUSD','delta_india',datetime.now(UTC))['state']=='current'"]
       interval: 60s
       timeout: 10s
       retries: 3

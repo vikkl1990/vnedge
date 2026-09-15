@@ -1381,6 +1381,18 @@ def create_app(
                                 headers=_identity(user))
         return JSONResponse(payload, headers={**_identity(user), "Cache-Control": "no-store"})
 
+    @app.get("/api/crypto-analyst/stage-outcomes/{symbol}")
+    async def crypto_analyst_stage_outcomes(request: Request, symbol: str,
+                                           exchange: str = "delta_india") -> JSONResponse:
+        from vnedge.research.stage_outcomes import DEFAULT_PATH, report
+        user = _authorized(request)
+        try:
+            payload = await asyncio.to_thread(report, DEFAULT_PATH, symbol, exchange, datetime.now(UTC))
+        except ValueError:
+            return JSONResponse({"detail": "unsupported_analyst_scope"}, status_code=422,
+                                headers=_identity(user))
+        return JSONResponse(payload, headers={**_identity(user), "Cache-Control": "no-store"})
+
     @app.get("/api/crypto-analyst/history/{symbol}")
     async def crypto_analyst_history(request: Request, symbol: str,
                                      exchange: str = "delta_india", source: str = "canonical") -> JSONResponse:
