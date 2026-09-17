@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from itertools import pairwise
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import pandas as pd
 from ccxt.base.errors import NetworkError, NotSupported
@@ -185,6 +185,9 @@ class _LaneSink:
 
 
 _HEALTH_AUDITOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lane-health")
+# Restoring multiple large WALs concurrently multiplies peak memory. One
+# recovery worker keeps HTTP responsive without unbounded recovery fan-out.
+_STARTUP_RECOVERY = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lane-recovery")
 
 
 class MultiLaneProvider:
@@ -1546,6 +1549,37 @@ def _closed_validated_warmup(
     return closed
 
 
+async def _restore_paper_session(
+    strategy: BaseStrategy,
+    feed: SharedFeedView,
+    history: pd.DataFrame,
+    config: RunnerConfig,
+    *,
+    gateway: PreTradeRiskGateway,
+    exchange: SimulatedExchange,
+    journal: DecisionJournal,
+    **session_options: Any,
+) -> LivePaperSession:
+    """Restore lane-owned objects before publication, without blocking HTTP.
+
+    Constructors replay the complete WAL for order deduplication, unresolved
+    orders, funding and evaluation state. Never replace that with a tail read.
+    The worker owns these objects until this await completes; feed/session
+    tasks are started later by the runner, on the main event loop only.
+    Cancellation may finish construction in the worker but cannot submit or
+    start a discarded session. Recovery failures propagate to lane startup.
+    """
+    def restore() -> LivePaperSession:
+        manager = OrderManager(gateway, journal, PaperBroker(exchange))
+        return LivePaperSession(
+            strategy, feed, history, config, gateway=gateway,
+            order_manager=manager, exchange=exchange, journal=journal,
+            **session_options,
+        )
+
+    return await asyncio.get_running_loop().run_in_executor(_STARTUP_RECOVERY, restore)
+
+
 async def build_lane(
     spec: LaneSpec,
     provider: MultiLaneProvider,
@@ -1837,14 +1871,12 @@ async def build_lane(
     )
     kill = KillSwitch(kill_file=journal_dir / f"{spec.lane_id}.KILL")
     gateway = PreTradeRiskGateway(config.risk, kill)
-    om = OrderManager(gateway, journal, PaperBroker(exchange))
-    session = LivePaperSession(
+    session = await _restore_paper_session(
         strategy,
         feed,
         history,
         config,
         gateway=gateway,
-        order_manager=om,
         exchange=exchange,
         journal=journal,
         snapshot_provider=provider.sink(spec.lane_id, spec.exchange),

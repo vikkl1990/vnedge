@@ -479,7 +479,7 @@ class LivePaperSession:
                 str(payload.get("book") or ""),
                 str(payload.get("funding_event_id") or ""),
             )
-            for record in journal.read_all()
+            for record in journal_records
             for payload in [record.get("payload")]
             if record.get("kind") == "funding_applied"
             and isinstance(payload, dict)
