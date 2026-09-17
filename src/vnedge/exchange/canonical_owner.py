@@ -243,7 +243,7 @@ async def _maintenance_loop(
 
 async def _delta_maintenance_loop(data_root: Path, candle_root: Path, *,
                                   symbols: Sequence[str], environ: Mapping[str, str],
-                                  lease_fd: int) -> None:
+                                  lease_fd: int, recovery_requested: asyncio.Event | None = None) -> None:
     from vnedge.data.delta_coverage import reproduce_sealed_minutes
     from vnedge.data.delta_lake_repair import _atomic, repair_delta_lake
     from vnedge.data.delta_raw_audit import audit_raw_day
@@ -254,6 +254,8 @@ async def _delta_maintenance_loop(data_root: Path, candle_root: Path, *,
     # Record first; never spend a historical replay window disconnected.
     await asyncio.sleep(10)
     while True:
+        if recovery_requested is not None:
+            recovery_requested.clear()
         forward: dict[str, Any] = {"generated_at": datetime.now(UTC).isoformat(), "symbols": {}, "can_trade": False}
         for symbol in symbols:
             try:
@@ -296,13 +298,25 @@ async def _delta_maintenance_loop(data_root: Path, candle_root: Path, *,
                 raw[symbol]["shard_count"] = len(audit.get("shards", []))
             recovery["raw_audit"] = raw
             _atomic(data_root / "reports/delta_recovery_plan.json", json.dumps(recovery, sort_keys=True).encode())
+            for symbol, plan in recovery["symbols"].items():
+                if plan.get("status") != "VERIFIED_WINDOW":
+                    logger.error("DELTA_UNRESOLVED_COVERAGE symbol=%s status=%s; reconnect does not repair absent trades",
+                                 symbol, plan.get("status", "UNKNOWN"))
         except Exception as exc:
             logger.exception("Delta recovery planning failed; repair authority unchanged")
             _atomic(data_root / "reports/delta_recovery_plan.json", json.dumps({
                 "generated_at": datetime.now(UTC).isoformat(), "status": "ERROR",
                 "reason": f"{type(exc).__name__}:{exc}", "can_apply": False,
                 "can_trade": False, "can_promote": False}).encode())
-        await asyncio.sleep(interval)
+        if recovery_requested is None:
+            await asyncio.sleep(interval)
+        else:
+            try:
+                await asyncio.wait_for(recovery_requested.wait(), timeout=interval)
+            except TimeoutError:
+                pass
+            # Bound work during reconnect storms; never restart the recorder.
+            await asyncio.sleep(5)
 
 
 async def run_owner(
@@ -362,9 +376,12 @@ async def run_owner(
         if exchange == "delta_india":
             maintenance_task = asyncio.create_task(
                 _delta_maintenance_loop(data_root, candle_root, symbols=symbols,
-                                        environ=environ, lease_fd=lease.fileno),
+                                        environ=environ, lease_fd=lease.fileno,
+                                        recovery_requested=recorder.recovery_requested),
                 name="delta-canonical-maintenance")
-            tasks = (recorder_task, maintenance_task)
+            from vnedge.exchange.delta_capture_health import monitor_capture
+            monitor_task = asyncio.create_task(monitor_capture(data_root), name="delta-capture-monitor")
+            tasks = (recorder_task, maintenance_task, monitor_task)
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 task.result()

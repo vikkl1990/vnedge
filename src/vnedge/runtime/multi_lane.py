@@ -397,6 +397,8 @@ class MultiLaneProvider:
         out.setdefault("latency", primary_session.get("latency"))
         out.setdefault("latency_recovery", primary_session.get("latency_recovery"))
         out["recorder_latency"] = self._recorder_latency()
+        from vnedge.exchange.delta_capture_health import capture_health
+        out["delta_capture_health"] = capture_health(self._recorder_latency_root.parent.parent)
         if self._canonical_router is not None:
             # Report-only transport truth. These counters never grant arm or
             # order permission; stream failures already fail subscriptions.

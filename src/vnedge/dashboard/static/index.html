@@ -3004,6 +3004,11 @@
     var el=$("dataIntegrity"); if(!el)return; var lh=s.lane_health||{},tot=lh.totals||{};
     var rows=Object.keys(vs).map(function(x){var v=ven(x),g=vs[x],lat=g.st/g.n,fresh=(lat<9000&&g.ok>0);
       return '<div class="kvrow"><span class="k">'+v.lab+' feed</span><span class="num" style="color:'+(fresh?"var(--long)":"var(--warn)")+'">'+(fresh?"fresh · ":"stale · ")+ageMs(lat)+'</span></div>';}).join('');
+    var capture=s.delta_capture_health||{};
+    Object.keys(capture.symbols||{}).forEach(function(symbol){var c=capture.symbols[symbol];
+      rows+='<div class="kvrow"><span class="k">Delta '+jEsc(symbol)+' capture</span><span class="num">'+(c.recording?'recording':c.connected?'connected · stale/unverified':'disconnected')+'</span></div>';
+    });
+    rows+='<div class="kvrow"><span class="k">Delta historical coverage</span><span class="num">'+jEsc(capture.coverage||'UNKNOWN')+'</span></div>';
     rows+='<div class="kvrow"><span class="k">Journal (WAL)</span><span class="num" style="color:'+(s.last_journal_write==="ok"?"var(--long)":"var(--short)")+'">'+(s.last_journal_write||"--")+'</span></div>';
     rows+='<div class="kvrow"><span class="k">Risk gateway</span><span class="num" style="color:'+(s.risk_status==="ok"?"var(--long)":"var(--short)")+'">'+(s.risk_status||"--")+'</span></div>';
     rows+='<div class="kvrow"><span class="k">Reconciliation</span><span class="num" style="color:'+(s.risk_status==="reconciling"?"var(--warn)":"var(--long)")+'">'+(s.risk_status==="reconciling"?"rebuilding":"matched")+'</span></div>';

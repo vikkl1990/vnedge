@@ -187,9 +187,9 @@ services:
         - python
         - -c
         - >-
-          import pathlib,time,sys;
-          files=list(pathlib.Path('data/ticks/exchange=delta_india').glob('symbol=*/stream=trades/*/*.parquet'));
-          sys.exit(0 if files and time.time()-max(p.stat().st_mtime for p in files)<180 else 1)
+          from pathlib import Path; import sys;
+          from vnedge.exchange.delta_capture_health import capture_health;
+          sys.exit(0 if capture_health(Path('data'))['recording'] else 1)
       interval: 30s
       timeout: 10s
       retries: 5

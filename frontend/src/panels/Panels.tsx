@@ -1049,6 +1049,13 @@ export function SystemPanel() {
   return (
     <div className="space-y-4">
       <TerminalPanel title="System" meta="freshness · feed · build · bad list">
+        <div className="mb-3 rounded-lg border border-line bg-inset p-3 font-mono text-xs">
+          <div>Delta capture — process uptime is not data completeness</div>
+          {Object.entries(snapshot.data?.delta_capture_health?.symbols ?? {}).map(([symbol, status]) =>
+            <div key={symbol}>{symbol}: {snapshot.isError || snapshotAge == null || snapshotAge > 15 ? "unknown / snapshot stale" : status.recording ? "connected · recording" : status.connected ? "connected · recording stale/unverified" : "disconnected"}</div>)}
+          <div>Historical coverage: {snapshot.isError || snapshotAge == null || snapshotAge > 15 ? "UNKNOWN" : snapshot.data?.delta_capture_health?.coverage ?? "UNKNOWN"}</div>
+          <div>Scanner readiness: separate per-lane gates; capture never grants permission.</div>
+        </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Build" value={meta.data?.build_sha?.slice(0, 8) ?? "—"} /></div>
           <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Host" value={meta.data?.host ?? "—"} /></div>

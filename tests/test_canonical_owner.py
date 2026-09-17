@@ -152,6 +152,7 @@ async def test_delta_owner_runs_native_recorder_without_binance_maintenance(
 
     class Recorder:
         def __init__(self, symbols, root, **kwargs):
+            self.recovery_requested = asyncio.Event()
             calls["symbols"] = symbols
             calls["root"] = root
             calls["kwargs"] = kwargs

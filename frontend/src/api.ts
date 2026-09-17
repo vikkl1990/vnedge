@@ -876,6 +876,10 @@ export interface LaneHealth {
 }
 
 export interface Snapshot {
+  delta_capture_health?: {
+    recording: boolean; coverage: string;
+    symbols?: Record<string, { connected: boolean; recording: boolean }>;
+  };
   mode?: string;
   symbol?: string;
   price?: PriceBook | null;

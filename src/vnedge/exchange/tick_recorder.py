@@ -1521,6 +1521,7 @@ class DeltaTickRecorder:
             on_connection_state=self._on_trade_connection_state,
             on_trade_fault=self._coverage_fault,
         )
+        self.recovery_requested = asyncio.Event()
 
     def _on_coverage_candle(self, candle: Candle) -> None:
         coverage = self._coverage.get(candle.symbol)
@@ -1720,6 +1721,11 @@ class DeltaTickRecorder:
         )
 
     def _on_trade_connection_state(self, connected: bool, at: datetime) -> None:
+        self._capture_connected = connected
+        self._save_capture_health()
+        self.recovery_requested.set()
+        if not connected:
+            logger.error("DELTA_CAPTURE_DISCONNECTED symbols=%s at=%s; historical coverage remains unproven after reconnect", self.symbols, at.isoformat())
         for coverage in self._coverage.values():
             coverage.connection(connected, at)
         if self.candle_sink is None or self.books_only:
@@ -1729,6 +1735,17 @@ class DeltaTickRecorder:
                 self.candle_sink.mark_trade_stream_connected(symbol, at)
             else:
                 self.candle_sink.mark_trade_stream_disconnected(symbol, at)
+
+    def _save_capture_health(self) -> None:
+        from vnedge.exchange.delta_capture_health import save_capture
+        try:
+            save_capture(self.root, self.symbols,
+                         connected=getattr(self, "_capture_connected", False),
+                         last_trades=self._max_seen_trade_ts_ms)
+        except OSError:
+            # Telemetry failure must not prevent the coverage disconnect from
+            # reaching the canonical sink. The old report ages out fail-closed.
+            logger.exception("Delta capture status write failed; health will remain unverified")
 
     def _drain_delta_reorder(
         self,
@@ -1912,6 +1929,7 @@ class DeltaTickRecorder:
                             replacement.connection(True, wall_now)
                         self._coverage[symbol] = replacement
                 if now >= next_latency_snapshot:
+                    self._save_capture_health()
                     self.recorder_latency_store.save_from(self.recorder_latency)
                     _write_trade_metrics(
                         self.root,

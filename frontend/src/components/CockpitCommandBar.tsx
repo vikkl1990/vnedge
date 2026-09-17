@@ -22,11 +22,12 @@ function aggregateGate(lanes: NonNullable<ReturnType<typeof useLanes>["data"]>["
 
 export function firstBlocker(lanes: NonNullable<ReturnType<typeof useLanes>["data"]>["lanes"]) {
   if (!lanes.some(lane => lane.observation_class === "shadow_observe" && lane.runtime_readiness)) return "operational readiness unknown";
-  const keys = ["live_blockers", "execution_blockers", "parity_blockers", "decision_blockers", "data_blockers"] as const;
-  for (const lane of lanes.filter((item) => item.observation_class === "shadow_observe")) {
-    for (const key of keys) {
+  const keys = ["data_blockers", "decision_blockers", "parity_blockers", "execution_blockers", "live_blockers"] as const;
+  const labels = { data_blockers: "Data", decision_blockers: "Decision", parity_blockers: "Parity evidence", execution_blockers: "Execution evidence", live_blockers: "Live locked" };
+  for (const key of keys) {
+    for (const lane of lanes.filter((item) => item.observation_class === "shadow_observe")) {
       const blocker = lane.runtime_readiness?.[key]?.[0];
-      if (blocker) return `${lane.symbol} · ${blocker.replace(/_/g, " ")}`;
+      if (blocker) return `${labels[key]} · ${lane.symbol} · ${blocker.replace(/_/g, " ")}`;
     }
   }
   const operational = lanes.filter(lane => lane.observation_class === "shadow_observe");
