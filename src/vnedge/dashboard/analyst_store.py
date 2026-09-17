@@ -101,20 +101,25 @@ class AnalystStore:
         if not self.path.exists():
             return []
         candidates = []
-        for index, path in enumerate(self._segments()):
+        paths = self._segments()
+        for index, path in enumerate(paths):
             with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)) as connection:
                 for row in connection.execute(
-                    "SELECT id, body, available_at, rowid FROM evidence WHERE kind=? AND scope=? "
+                    "SELECT id, available_at, rowid FROM evidence WHERE kind=? AND scope=? "
                     "AND available_at<=? ORDER BY available_at DESC, rowid DESC LIMIT ?",
                     (kind, scope, utc(now).isoformat(), limit),
                 ).fetchall():
                     candidates.append((*row, index))
-        candidates.sort(key=lambda row: (row[2], row[4], row[3]), reverse=True)
+        candidates.sort(key=lambda row: (row[1], row[3], row[2]), reverse=True)
         rows = []
         seen = set()
-        for record_id, compressed, available, _, _ in candidates:
+        for record_id, available, rowid, index in candidates:
             if record_id not in seen:
                 seen.add(record_id)
+                # Rank metadata first: do not load limit * segments large raw
+                # payloads into RAM for a request that only needs limit rows.
+                with closing(sqlite3.connect(paths[index].resolve().as_uri() + "?mode=ro", uri=True, timeout=2)) as connection:
+                    compressed = connection.execute("SELECT body FROM evidence WHERE rowid=? AND id=?", (rowid, record_id)).fetchone()[0]
                 rows.append((record_id, compressed, available))
             if len(rows) == limit:
                 break
