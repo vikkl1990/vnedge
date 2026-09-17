@@ -52,3 +52,13 @@ def test_regime_router_knows_new_sleeves_but_grants_no_stress_permission():
     assert router.allows("trend_pullback_1h_v1") is True
     router.regime = Regime.STRESS
     assert router.allows("session_continuation_15m_v1") is False
+
+
+def test_reject_category_does_not_turn_signal_into_arm_or_order():
+    failed = enrich_evaluation({"fired": False, "primary_failed_gate": "gap_parent"})
+    assert failed["evaluation_outcome"] == "REJECT"
+    assert failed["reject_category"] == "data"
+    signal = enrich_evaluation({"fired": True})
+    assert signal["evaluation_outcome"] == "SIGNAL"
+    assert signal["reject_category"] is None
+    assert "decision_id" not in signal

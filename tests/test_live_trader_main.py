@@ -11,6 +11,8 @@ from vnedge.runtime.live_trader_main import (
     _EXIT_CHECKLIST,
     _EXIT_GATES,
     _EXIT_OK,
+    _EXIT_PRIVATE_STREAM,
+    _EXIT_CANONICAL_FEED,
     _EXIT_STRATEGY,
     LiveTraderRunConfig,
     _default_account,
@@ -175,6 +177,57 @@ async def test_all_gates_open_wires_and_runs(tmp_path, monkeypatch):
     # M2: the private fill/order stream is wired and torn down with the session
     assert facs["private_stream_factory"].calls == 1
     assert facs["private_stream_factory"].obj.closed
+
+
+async def test_delta_private_refuse_precedes_every_client_even_with_injected_stream(
+    tmp_path, monkeypatch,
+):
+    from vnedge.strategy import strategy_registry
+
+    _live_env(monkeypatch, tmp_path)
+    delta = LiveTraderRunConfig(
+        exchange="delta_india", symbol="BTC/USD:USD", strategy_id=CFG.strategy_id
+    )
+    monkeypatch.setattr(strategy_registry, "CAPITAL_APPROVED", frozenset({delta.strategy_id}))
+    facs = _facs()
+    code = await run_live_trader(Settings(**LIVE_ENV), delta, max_bars=0, **facs)
+    assert code == _EXIT_PRIVATE_STREAM
+    assert all(
+        facs[name].calls == 0
+        for name in (
+            "adapter_factory", "account_factory", "feed_factory",
+            "strategy_factory", "private_stream_factory",
+        )
+    )
+
+
+async def test_registered_scanner_refuses_exchange_ohlc_live_feed_before_clients(
+    tmp_path, monkeypatch,
+):
+    from vnedge.strategy import strategy_registry
+
+    _live_env(monkeypatch, tmp_path)
+    registered = LiveTraderRunConfig(
+        exchange="binanceusdm",
+        symbol="BTC/USDT:USDT",
+        timeframe="15m",
+        strategy_id="htf_regime_continuation_15m_v2__BTCUSD",
+    )
+    # Simulate a future reviewed promotion solely to exercise the feed gate;
+    # the real pair ID remains RESEARCH_ONLY and the production allowlist empty.
+    monkeypatch.setattr(
+        strategy_registry, "is_capital_eligible", lambda strategy_id: strategy_id == registered.strategy_id
+    )
+    facs = _facs()
+    code = await run_live_trader(Settings(**LIVE_ENV), registered, max_bars=0, **facs)
+    assert code == _EXIT_CANONICAL_FEED
+    assert all(
+        facs[name].calls == 0
+        for name in (
+            "adapter_factory", "account_factory", "feed_factory",
+            "strategy_factory", "private_stream_factory",
+        )
+    )
 
 
 def test_timeframe_conversion_is_explicit_and_validated():

@@ -62,6 +62,25 @@ def test_regime_strategy_is_next_open_research_only() -> None:
     assert not is_shadow_observe_eligible(strategy_id)
 
 
+def test_v2_reports_bad_parent_before_regime_without_changing_setup(monkeypatch):
+    strategy = HtfRegimeContinuation15mV2()
+    monkeypatch.setattr(HtfRegimeContinuation15mV1, "evaluation_diagnostics", lambda *args: {})
+    monkeypatch.setattr(strategy, "_missing_permission_context", lambda row: ())
+    frame = pd.DataFrame([{
+        "bos15_parent_identity_ok": True,
+        "bos15_structure_health_reason": "structure_parent_ineligible",
+        "mreg_state": "mean_revert", "mreg_ready": 1,
+        "mreg_allow_long": 0, "mreg_allow_short": 0,
+    }])
+    report = strategy.evaluation_diagnostics(frame, 0)
+    assert report["primary_failed_gate"] == "gap_parent"
+    assert "regime_flat" in report["all_failed_gates"]
+    assert report["features"]["side_policy"] == "both"
+    assert report["features"]["permission_long"] is False
+    assert report["features"]["permission_short"] is False
+    assert not report["eligible"]
+
+
 def test_regime_v2_is_a_separate_non_capital_ohlc_contract() -> None:
     strategy_id = HtfRegimeContinuation15mV2.strategy_id
     contract = scanner_runtime_contract(strategy_id)
@@ -293,8 +312,14 @@ def test_regime_invalidation_requests_reduce_only_exit() -> None:
     assert intent.exit_price == 99.0
 
 
-def test_next_open_signal_carries_actual_bound_permission_snapshot() -> None:
-    strategy = HtfRegimeContinuation15mV2()
+@pytest.mark.parametrize("strategy_id", [
+    "htf_regime_continuation_15m_v2",
+    "htf_regime_continuation_15m_v2__BTCUSD",
+    "htf_regime_continuation_15m_v2__ETHUSD",
+])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_next_open_signal_carries_actual_bound_permission_snapshot(strategy_id, side) -> None:
+    strategy = get_strategy_class(strategy_id)()
     strategy.warmup_bars = 0
     h4 = pd.DataFrame(
         [
@@ -340,9 +365,10 @@ def test_next_open_signal_carries_actual_bound_permission_snapshot() -> None:
                 "is_closed": True,
                 "data_quality": "ok",
                 "candle_source": "router",
-                "rt_allow_long": 1.0,
-                "rt_allow_short": 0.0,
+                "rt_allow_long": float(side == "long"),
+                "rt_allow_short": float(side == "short"),
                 "rt_long_structural_stop": 98.0,
+                "rt_short_structural_stop": 104.0,
                 "mreg_weekly": "up",
                 "mreg_daily": "mid",
                 "mreg_h4": "up",
@@ -357,6 +383,7 @@ def test_next_open_signal_carries_actual_bound_permission_snapshot() -> None:
     intent = strategy.signal(prepared, 0)
 
     assert intent is not None
+    assert intent.side == side
     assert intent.permission_snapshot is not None
     assert intent.permission_snapshot.context_bars[0].open_time == pd.Timestamp(
         "2026-09-04T04:00:00Z"

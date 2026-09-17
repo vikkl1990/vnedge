@@ -66,6 +66,8 @@ _EXIT_GATES = 10
 _EXIT_CHECKLIST = 11
 _EXIT_CREDENTIALS = 12
 _EXIT_STRATEGY = 13
+_EXIT_PRIVATE_STREAM = 14
+_EXIT_CANONICAL_FEED = 15
 
 _WARMUP_BARS = 500
 
@@ -299,6 +301,28 @@ async def run_live_trader(
     if not _credentials_present():
         logger.error("REFUSED: VNEDGE_EXEC_API_KEY/SECRET not set. No live client constructed.")
         return _EXIT_CREDENTIALS
+
+    # These are process-level capability checks, not scanner decisions.  In
+    # particular an injected test stream cannot stand in for native Delta
+    # order/fill/position truth on a capital path.  Check before the journal,
+    # product bootstrap, adapter, account provider, or public feed is built.
+    if config.exchange.lower() in {"delta", "delta_india", "deltaindia"}:
+        logger.error(
+            "REFUSED: Delta private evidence collector is not a reconciled "
+            "order/fill/position execution stream. "
+            "No live client constructed."
+        )
+        return _EXIT_PRIVATE_STREAM
+
+    # A registered scanner must consume the same hashed trade-lake closes as
+    # its shadow decision.  This entrypoint still wires exchange OHLC warmup
+    # and live candles; refuse rather than silently change the scanner claim.
+    if scanner_runtime_contract(config.strategy_id) is not None:
+        logger.error(
+            "REFUSED: registered scanner has no canonical closed-bar live feed "
+            "and warmup binding. No live client constructed."
+        )
+        return _EXIT_CANONICAL_FEED
 
     # All gates open — NOW it is safe to build live clients.
     logger.warning(

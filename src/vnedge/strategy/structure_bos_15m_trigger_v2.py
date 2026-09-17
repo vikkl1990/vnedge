@@ -114,11 +114,19 @@ def _complete_hour_frame(candles: pd.DataFrame) -> pd.DataFrame:
     for hour_open, group in work.groupby("hour_open", sort=True):
         if set(group["minute"].astype(int)) != {0, 15, 30, 45} or len(group) != 4:
             continue
+        group = group.sort_values("timestamp")
+        if list(group["timestamp"]) != list(pd.date_range(hour_open, periods=4, freq="15min")):
+            continue
         quality = (
             group["data_quality"].astype(str).str.lower().eq("ok").all()
             if "data_quality" in group.columns
             else True
         )
+        # Do not turn a forming/uncovered child into a closed, usable parent
+        # simply because its numerical OHLC values and quality string exist.
+        for flag in ("is_closed", "coverage_ok"):
+            if flag in group.columns:
+                quality = quality and group[flag].eq(True).fillna(False).all()
         rows.append(
             {
                 "timestamp": hour_open,

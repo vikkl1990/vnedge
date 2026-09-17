@@ -28,6 +28,25 @@ _ACCEPT_TOKENS = ("accept", "hold", "confirmation")
 _COST_TOKENS = ("cost", "projected_net", "edge")
 
 
+def rejection_category(reason: str | None) -> str | None:
+    """Stable report categories; preserve the original gate text as evidence."""
+    if not reason:
+        return None
+    for category, tokens in (
+        ("data", ("gap", "quality", "canonical_bar", "no_bar", "candle_path", "identity")),
+        ("context", ("context", "parent_missing")),
+        ("warmup", ("warmup", "min_bars", "not_enough")),
+        ("side", ("side_filtered",)),
+        ("regime", ("regime", "family_mismatch")),
+        ("structure", ("structure", "swing")),
+        ("cost", ("cost", "edge", "projected_net")),
+        ("clock", ("clock", "quote", "chase")),
+    ):
+        if any(token in reason for token in tokens):
+            return category
+    return "setup"
+
+
 def _flags(features: Mapping[str, Any], tokens: tuple[str, ...]) -> bool:
     return any(bool(value) and any(token in str(name).lower() for token in tokens)
                for name, value in features.items())
@@ -144,6 +163,12 @@ def enrich_evaluation(record: Mapping[str, Any]) -> dict[str, Any]:
     enriched["setup_lifecycle"] = lifecycle.value
     enriched["near_miss"] = build_near_miss([str(item) for item in failed], distances)
     enriched["observability_version"] = 1
+    # A lane evaluation cannot attest ARM or an order. Those require their
+    # own envelope / managed-order records, joined later by the reader.
+    enriched["evaluation_outcome"] = "SIGNAL" if record.get("fired") else "REJECT"
+    enriched["reject_category"] = rejection_category(
+        str(record.get("primary_failed_gate") or record.get("skip_reason") or "no_setup")
+    ) if not record.get("fired") else None
     return enriched
 
 

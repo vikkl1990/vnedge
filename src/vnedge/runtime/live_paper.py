@@ -1146,6 +1146,9 @@ class LivePaperSession:
                 self.journal.append(
                     "canonical_bar_timeout",
                     {
+                        "evaluation_outcome": "REJECT",
+                        "primary_failed_gate": "no_bar",
+                        "reject_category": "data",
                         "strategy_id": self.strategy.strategy_id,
                         "symbol": self.config.symbol,
                         "timeframe": self.config.timeframe,
@@ -1314,6 +1317,9 @@ class LivePaperSession:
                 self.journal.append(
                     "canonical_context_timeout",
                     {
+                        "evaluation_outcome": "REJECT",
+                        "primary_failed_gate": "no_context",
+                        "reject_category": "context",
                         "strategy_id": self.strategy.strategy_id,
                         "symbol": self.config.symbol,
                         "timeframe": timeframe,

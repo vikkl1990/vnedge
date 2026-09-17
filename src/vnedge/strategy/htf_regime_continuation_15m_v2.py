@@ -35,6 +35,7 @@ STRATEGY_SPEC = MappingProxyType(
         "timeframe": "15m",
         "context_timeframes": ("4h", "1d"),
         "entry_clock": "next_15m_open",
+        "side_policy": "both",
         "weekly_classifier": "range_structure_v1",
         "vwap_source": None,
         "structure_source": "canonical_ohlc_price_only_v1",
@@ -144,9 +145,12 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
         )
         pullback = flag("hsc_pullback_long") or flag("hsc_pullback_short")
         missing_context = self._missing_permission_context(row)
+        health = structure_health_diagnostics(row)
         checks = (
             (not missing_context, "htf_context_missing"),
             (flag("bos15_parent_identity_ok"), "structure_parent_missing"),
+            (health.get("bos15_structure_health_reason") != "structure_parent_ineligible",
+             "gap_parent"),
             (flag("mreg_ready"), "market_regime_not_ready"),
             (str(row.get("mreg_state")) == "continuation", "regime_flat"),
             (regime_side, "family_mismatch"),
@@ -161,7 +165,12 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
         features = dict(diagnostics.get("features", {}))
         features.update(
             {
-                **structure_health_diagnostics(row),
+                **health,
+                "side_policy": "both",
+                "permission_long": flag("mreg_allow_long"),
+                "permission_short": flag("mreg_allow_short"),
+                "setup_long": flag("rt_allow_long"),
+                "setup_short": flag("rt_allow_short"),
                 "structure_source": "canonical_ohlc_price_only_v1",
                 "avwap_source": "unavailable",
                 "entry_structure": "closed_1h_structure_plus_15m_reclaim",

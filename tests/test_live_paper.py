@@ -2642,6 +2642,10 @@ async def test_canonical_close_timeout_is_explicit_and_non_armable(tmp_path):
     assert session.candles.iloc[-1]["data_quality"] == "gap"
     assert session.candles.iloc[-1]["candle_source"] == "exchange_ohlcv"
     assert session.journal.read_all()[-1]["kind"] == "canonical_bar_timeout"
+    rejection = session.journal.read_all()[-1]["payload"]
+    assert rejection["evaluation_outcome"] == "REJECT"
+    assert rejection["primary_failed_gate"] == "no_bar"
+    assert rejection["reject_category"] == "data"
     session._enter_degraded("canonical_bar_timeout", recoverable=True)
     assert session._candle_path_arm_block(datetime.now(UTC)) == (
         "lane_degraded:canonical_bar_timeout"
