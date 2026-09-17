@@ -11,6 +11,7 @@ export interface QueueRow {
   observed_at: string | null; last_event_at: string | null;
   stage: string; population: string; has_fill: boolean; evidence_status: string;
   primary_reason: string | null; failed_gates: string[];
+  decision_context?: { explanation: string } | null;
   entry: number | null; stop: number | null; target: number | null;
   cost_profile_id: string | null; ml_probability: number | null; ml_status: string;
   outcome_basis: string; research_net_usd: number | null; booked_net_usd: number | null;
@@ -43,6 +44,11 @@ export function queueOutcome(row: Pick<QueueRow, "outcome_basis" | "research_net
   if (row.outcome_basis === "research_observation" && row.research_net_usd != null)
     return `Research sim. ${row.research_net_usd >= 0 ? "+" : "−"}$${Math.abs(row.research_net_usd).toFixed(2)}`;
   return row.has_fill ? "Fill recorded · PnL in Book" : "No recorded fill";
+}
+export function queueReason(row: Pick<QueueRow, "stage" | "primary_reason" | "decision_context">): string {
+  // A past setup explanation must not hide a later risk/order rejection.
+  return (row.stage === "evaluated" ? row.decision_context?.explanation : null)
+    || row.primary_reason || "No reason recorded";
 }
 
 const VIEWS = [
@@ -136,7 +142,7 @@ export function SignalQueue() {
           <td className="px-3 py-4 font-mono">{queuePrice(row.entry)}<span className="mt-1 block text-dim">SL {queuePrice(row.stop)}</span></td>
           <td className="px-3 py-4"><TerminalBadge tone={row.stage === "identity_gap" ? "bad" : row.stage === "rejected" ? "warn" : row.has_fill ? "info" : "neutral"}>{human(row.stage)}</TerminalBadge></td>
           <td className="px-3 py-4 text-dim" title="No recorded, validated model prediction">—<small className="block">not recorded</small></td>
-          <td className="max-w-80 px-3 py-4"><span className={row.outcome_basis === "research_observation" ? "text-warn" : "text-dim"}>{queueOutcome(row)}</span><small className="mt-1 block break-words text-dim">{row.primary_reason || "No reason recorded"}</small></td>
+          <td className="max-w-80 px-3 py-4"><span className={row.outcome_basis === "research_observation" ? "text-warn" : "text-dim"}>{queueOutcome(row)}</span><small className="mt-1 block break-words text-dim">{queueReason(row)}</small><small className="block text-faint">{row.primary_reason}</small></td>
           <td className="px-3 py-4"><button aria-expanded={selected === row.row_key} className="rounded border border-info/30 px-2 py-1 text-info hover:bg-info/10" onClick={() => setSelected(selected === row.row_key ? null : row.row_key)}>Inspect</button><small className="mt-1 block text-dim">{row.evidence_status}</small></td>
         </tr>)}</tbody>
       </table>

@@ -121,6 +121,9 @@ def normalize(lane: str, record: dict) -> dict | None:
         for x in p[field][:50] if isinstance(x, str)
     ))
     reason = next((text(p.get(k)) for k in ("primary_failed_gate", "skip_reason", "reason", "explanation", "resolution") if text(p.get(k))), None)
+    from vnedge.strategy.decision_context import explain_evaluation
+
+    context = explain_evaluation(p).to_dict() if kind == "lane_eval" else None
     proof = envelope.as_dict() if envelope else None
     cost = obj(ev.get("cost_decision"))
     intent_hash = None
@@ -153,6 +156,7 @@ def normalize(lane: str, record: dict) -> dict | None:
         "order_state": text(p.get("state") or p.get("venue_state")),
         "approved": p.get("approved") if isinstance(p.get("approved"), bool) else None,
         "fired": p.get("fired") is True, "failures": failures, "reason": reason,
+        "decision_context": context,
         "cost_profile_id": text(cost.get("cost_profile_id") or p.get("cost_profile_id")),
         "quote_sequence": (ev["quote_sequence"] if type(ev.get("quote_sequence")) is int
                            else text(ev.get("quote_sequence"))),
@@ -245,6 +249,7 @@ def project(events: list[dict]) -> list[dict]:
             "stage": stage, "population": population, "has_fill": filled,
             "evidence_status": "conflict" if conflict else "bound" if bound else "unbound",
             "primary_reason": latest_value("reason"), "failed_gates": list(dict.fromkeys(failures)),
+            "decision_context": latest_value("decision_context"),
             "entry": latest_value("entry"), "stop": latest_value("stop"), "target": latest_value("target"),
             "cost_profile_id": latest_value("cost_profile_id"),
             "ml_status": "not_recorded", "ml_probability": None,

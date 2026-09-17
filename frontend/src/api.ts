@@ -520,6 +520,7 @@ export interface CorrectionLane {
   arm_skips: number;
   last_signal_age_seconds: number | null;
   last_signal_reason: string;
+  decision_context?: { explanation: string; regime_state: string | null; read_only: boolean };
   current_waiting_reason: string;
   cost_profile: string;
   entry_route: "auto" | "taker" | "maker_retest" | string;

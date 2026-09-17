@@ -1,11 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { queueOutcome, queuePrice, queueTime } from "./SignalQueue";
+import { queueOutcome, queuePrice, queueTime, queueReason } from "./SignalQueue";
 import { SignalQueue } from "./SignalQueue";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 describe("signal queue presentation truth", () => {
+  it("explains evaluations without hiding a later risk rejection", () => {
+    const row = { stage: "evaluated", primary_reason: "regime_flat",
+      decision_context: { explanation: "Mean-reversion context; continuation does not match." } };
+    expect(queueReason(row)).toBe(row.decision_context.explanation);
+    expect(queueReason({ ...row, stage: "rejected", primary_reason: "risk: daily loss" })).toBe("risk: daily loss");
+    expect(queueReason({ stage: "evaluated", primary_reason: "legacy_gate" })).toBe("legacy_gate");
+  });
   it("never renders missing price as zero", () => {
     expect(queuePrice(null)).toBe("—");
     expect(queuePrice(NaN)).toBe("—");

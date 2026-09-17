@@ -146,6 +146,42 @@ async def test_gated_replay_refuses_missing_canonical_identity(tmp_path):
     assert any(r["kind"] == "entry_evidence_rejected" for r in journal.read_all())
 
 
+@pytest.mark.parametrize("missing_next_open", [False, True])
+async def test_strict_paper_path_trace_and_missing_clock(tmp_path, missing_next_open):
+    """Synthetic mechanics fixture; no market-edge or promotion evidence."""
+    from dataclasses import replace
+    from vnedge.data.bar_identity import bar_content_sha256
+    from vnedge.research.paper_path_replay import summarize_path
+    from vnedge.risk.cost_gate import CostGate, CostProfile
+
+    candles = make_candles([FLAT] * 6 + [(100., 107., 99.5, 106.5)] + [FLAT] * 3)
+    if missing_next_open:
+        candles = candles.drop(index=5).reset_index(drop=True)
+    candles["candle_source"] = "canonical_tick_lake"
+    candles["is_closed"] = True
+    candles["data_quality"] = "ok"
+    candles["content_sha256"] = [bar_content_sha256(
+        row.to_dict(), open_time=row.timestamp.to_pydatetime(),
+        close_time=(row.timestamp + pd.Timedelta(hours=1)).to_pydatetime(),
+        source="canonical_tick_lake") for _, row in candles.iterrows()]
+    sig = replace(LONG, expected_gross_edge_bps=100, edge_model_id="synthetic_fixture_only")
+    runner, exchange, _, journal = build_world(tmp_path, candles, OneShotStrategy(4, sig))
+    runner.entry_cost_gate = CostGate(CostProfile.DELTA_SCALP_V2)
+    runner.require_canonical_truth = True
+    runner.record_evaluations = True
+    report = await runner.run()
+    proof = summarize_path(journal, report=report, open_positions=len(exchange.get_positions()))
+    assert proof["performance_eligible"] is proof["can_trade"] is proof["can_promote"] is False
+    if missing_next_open:
+        assert proof["rejections"]["next_open_missing"] == 1
+        assert report.fills == 0
+        assert proof["mechanics_round_trip_observed"] is False
+    else:
+        assert proof["completed_round_trips"] == 1
+        assert proof["mechanics_round_trip_observed"] is True
+        assert proof["journal_chain"]["ok"] is True
+
+
 async def test_paper_ladder_captures_tp1_then_breakeven_stop(tmp_path):
     bars = (
         [FLAT] * 6

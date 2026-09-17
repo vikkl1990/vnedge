@@ -469,6 +469,9 @@ def build_lanes_payload(
         lane_id = str(lane.get("lane_id") or "")
         health = lane_health(lane, has_problem=lane_id in problems)
         reason = _last_signal_reason(lane, eligibility=eligibility, mode=mode)
+        from vnedge.strategy.decision_context import explain_evaluation
+
+        decision_context = explain_evaluation(_mapping(lane.get("last_eval"))).to_dict()
         waiting_reason = _current_waiting_reason(lane, reason)
         open_positions = _position_count(lane)
         lane_lifecycle = _scanner_lifecycle(
@@ -542,6 +545,7 @@ def build_lanes_payload(
                     None if mode == "measurement" else _age_seconds(lane.get("last_fired_ts"), at)
                 ),
                 "last_signal_reason": reason,
+                "decision_context": decision_context,
                 "current_waiting_reason": waiting_reason,
                 "cost_profile": str(lane.get("cost_profile") or "unreported"),
                 "entry_route": str(lane.get("entry_route") or "auto"),

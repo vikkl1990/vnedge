@@ -235,6 +235,7 @@ export function StrategyWorkbench() {
               <div><span>Accept</span><strong>{age(lane.drought?.accept_age_s)}</strong></div>
             </div>
             <div className="dominant-gate"><span>Why waiting</span><strong>{text(lane.drought?.last_primary_failed_gate, lane.current_waiting_reason)}</strong></div>
+            {lane.decision_context && <p className="text-sm text-dim">Last evaluation: {lane.decision_context.explanation}</p>}
             <div className="gate-histogram">
               {topGates.map(([gate, count]) => <div key={gate}><span title={gate}>{gate.replace(/_/g, " ")}</span><i><b style={{ width: `${gateTotal ? Math.max(4, count / gateTotal * 100) : 0}%` }} /></i><strong>{count}</strong></div>)}
               {!topGates.length && <p>No 24h gate histogram reported.</p>}

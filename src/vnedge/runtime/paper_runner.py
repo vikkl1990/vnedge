@@ -82,6 +82,7 @@ class PaperRunner:
         on_bar=None,  # optional async hook(bar_index, ts) — pacing/snapshots
         entry_cost_gate: CostGate | None = None,
         require_canonical_truth: bool = False,
+        record_evaluations: bool = False,
     ) -> None:
         self.strategy = strategy
         self.candles = candles
@@ -91,6 +92,7 @@ class PaperRunner:
         # Frozen legacy replays keep their original semantics.
         self.entry_cost_gate = entry_cost_gate
         self.require_canonical_truth = require_canonical_truth
+        self.record_evaluations = record_evaluations
         self.gateway = gateway
         self.om = order_manager
         self.execution_context = ExecutionContext.from_runner_mode(
@@ -169,6 +171,11 @@ class PaperRunner:
         if not sizing.approved:
             self.sizing_skips += 1
             logger.info("sizing skipped entry: %s", sizing.reasons)
+            self.journal.append("sizing_rejected", {
+                "strategy_id": self.strategy.strategy_id, "symbol": self.config.symbol,
+                "decision_id": sig.decision_envelope.decision_id if sig.decision_envelope else None,
+                "reasons": list(sizing.reasons),
+            })
             return None
         return OrderIntent(
             symbol=self.config.symbol, side=sig.side, quantity=sizing.quantity,
@@ -240,6 +247,9 @@ class PaperRunner:
         )
         self.orders_submitted += 1
         self.journal.append("paper_exit", {
+            "entry_client_order_id": plan.order.client_order_id,
+            "client_order_id": order.client_order_id,
+            "entry_decision_id": plan.signal.decision_envelope.decision_id if plan.signal.decision_envelope else None,
             "reason": reason,
             "state": order.state.value,
             "ts": str(bar_ts),
@@ -363,6 +373,21 @@ class PaperRunner:
             self.tracker.on_bar(ts)
 
             # 2) fill last bar's signal at this bar's open
+            if pending_signal is not None and self.require_canonical_truth:
+                expected_open = pending_decision_ts + pd.Timedelta(self.config.timeframe)
+                if pd.Timestamp(ts) != expected_open:
+                    self.journal.append("entry_clock_rejected", {
+                        "reason": "next_open_missing", "expected_open": expected_open.isoformat(),
+                        "actual_open": pd.Timestamp(ts).isoformat(),
+                        "decision_id": pending_signal.decision_envelope.decision_id,
+                    })
+                    pending_signal = None
+                    pending_decision_ts = None
+                else:
+                    self.journal.append("entry_clock_confirmed", {
+                        "clock": "next_open", "actual_open": pd.Timestamp(ts).isoformat(),
+                        "decision_id": pending_signal.decision_envelope.decision_id,
+                    })
             if pending_signal is not None and plan is None and not parked:
                 ref_price = float(bar["open"])
                 if self.entry_cost_gate is not None:
@@ -463,6 +488,23 @@ class PaperRunner:
                 and j < n - 1
             ):
                 sig = self.strategy.signal(df, j)
+                if self.record_evaluations:
+                    from vnedge.strategy.scanner_observability import enrich_evaluation
+
+                    explain = getattr(self.strategy, "evaluation_diagnostics", None)
+                    diagnostics = explain(df, j) if callable(explain) else {}
+                    self.journal.append("lane_eval", enrich_evaluation({
+                        **diagnostics, "strategy_id": self.strategy.strategy_id,
+                        "symbol": cfg.symbol, "timeframe": cfg.timeframe,
+                        "bar_ts": pd.Timestamp(ts).isoformat(),
+                        "decision_at": (pd.Timestamp(ts) + pd.Timedelta(cfg.timeframe)).isoformat(),
+                        "fired": sig is not None, "backfill": False,
+                        "scope": "offline_paper_replay",
+                        "mreg_ready": bool(bar.get("mreg_ready") == 1) if "mreg_ready" in bar else None,
+                        "structure_ready": bool(bar.get("bos15_structure_ready") == 1) if "bos15_structure_ready" in bar else None,
+                        "data_source": {"candle_source": bar.get("candle_source"),
+                                        "decision_row_sha256": bar.get("content_sha256")},
+                    }))
                 if sig is not None:
                     decision_row = bar.to_dict()
                     decision_row.setdefault("candle_source", "research_replay")

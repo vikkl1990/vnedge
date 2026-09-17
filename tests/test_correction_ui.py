@@ -16,6 +16,20 @@ from vnedge.dashboard.correction_ui import (
 NOW = datetime(2026, 8, 16, 14, 0, tzinfo=UTC)
 
 
+def test_cockpit_context_matches_journal_without_changing_gate():
+    from vnedge.strategy.scanner_observability import enrich_evaluation
+    state = snapshot()
+    evaluation = enrich_evaluation({
+        "strategy_id": "htf_regime_continuation_15m_v2__BTCUSD",
+        "mreg_ready": True, "primary_failed_gate": "regime_flat",
+        "features": {"regime_state": "mean_revert"},
+    })
+    state["lanes"][0]["last_eval"] = evaluation
+    row = build_lanes_payload(state, now=NOW)["lanes"][0]
+    assert row["decision_context"] == evaluation["decision_context"]
+    assert row["last_eval"]["primary_failed_gate"] == "regime_flat"
+
+
 @pytest.mark.parametrize("positions,expected", [(0, "watching"), (1, "holding")])
 def test_soft_ops_warning_does_not_replace_setup_state(positions, expected):
     state = snapshot()

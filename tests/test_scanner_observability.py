@@ -17,7 +17,7 @@ def test_evaluation_enrichment_is_read_only_and_reports_near_miss():
     }
     result = enrich_evaluation(source)
     assert source.get("setup_lifecycle") is None
-    assert result["setup_lifecycle"] == "armed"
+    assert result["setup_lifecycle"] == "setup_detected"
     assert result["near_miss"]["counterfactual_only"] is True
     assert result["near_miss"]["closest_distance"] == 0.12
 

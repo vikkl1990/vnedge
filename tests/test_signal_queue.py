@@ -50,6 +50,19 @@ def test_no_setup_does_not_mint_decision_or_plan():
     assert row["ml_probability"] is None
 
 
+def test_queue_uses_same_explanation_as_recorded_context():
+    from vnedge.strategy.scanner_observability import enrich_evaluation
+    payload = enrich_evaluation({
+        "strategy_id": "htf_regime_continuation_15m_v2__BTCUSD",
+        "mreg_ready": True, "primary_failed_gate": "regime_flat", "fired": False,
+        "features": {"regime_state": "mean_revert"},
+    })
+    row, = fold(rec(**payload))
+    assert row["decision_context"] == payload["decision_context"]
+    assert "Mean-reversion" in row["decision_context"]["explanation"]
+    assert row["primary_reason"] == "regime_flat"
+
+
 def test_direct_decision_armed_payload_is_a_bound_decision_not_a_fill():
     envelope = arm()
     row, = fold(rec("decision_armed", **envelope))

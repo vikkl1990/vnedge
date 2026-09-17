@@ -15,6 +15,8 @@ from typing import Any
 
 class SetupLifecycle(str, Enum):
     WATCHING = "watching"
+    SETUP_DETECTED = "setup_detected"
+    SIGNAL_DETECTED = "signal_detected"
     ARMED = "armed"
     BREAK_DETECTED = "break_detected"
     ACCEPTED = "accepted"
@@ -48,7 +50,8 @@ def rejection_category(reason: str | None) -> str | None:
 
 
 def _flags(features: Mapping[str, Any], tokens: tuple[str, ...]) -> bool:
-    return any(bool(value) and any(token in str(name).lower() for token in tokens)
+    return any((value is True or (type(value) in (int, float) and value == 1))
+               and any(token in str(name).lower() for token in tokens)
                for name, value in features.items())
 
 
@@ -60,19 +63,19 @@ def classify_lifecycle(
     features: Mapping[str, Any],
     signal_reason: str | None = None,
 ) -> SetupLifecycle:
-    """Infer the furthest completed setup stage from explicit evidence."""
+    """Evaluations attest detection only, never execution lifecycle events."""
     if fired:
-        return SetupLifecycle.SHADOW_INTENT
+        return SetupLifecycle.SIGNAL_DETECTED
     if eligible:
-        return SetupLifecycle.COST_APPROVED
+        return SetupLifecycle.SETUP_DETECTED
     if _flags(features, _ACCEPT_TOKENS):
-        return SetupLifecycle.ACCEPTED
+        return SetupLifecycle.SETUP_DETECTED
     if _flags(features, _BREAK_TOKENS) or signal_reason:
         return SetupLifecycle.BREAK_DETECTED
     # An arm-ready/compressed/setup flag means the market has completed the
     # scanner's setup, even when the later trigger is absent.
     if _flags(features, ("arm_ready", "compressed", "setup_ready", "trend_ok")):
-        return SetupLifecycle.ARMED
+        return SetupLifecycle.SETUP_DETECTED
     return SetupLifecycle.WATCHING
 
 
@@ -162,7 +165,10 @@ def enrich_evaluation(record: Mapping[str, Any]) -> dict[str, Any]:
     )
     enriched["setup_lifecycle"] = lifecycle.value
     enriched["near_miss"] = build_near_miss([str(item) for item in failed], distances)
-    enriched["observability_version"] = 1
+    enriched["observability_version"] = 2
+    from vnedge.strategy.decision_context import explain_evaluation
+
+    enriched["decision_context"] = explain_evaluation(record).to_dict()
     # A lane evaluation cannot attest ARM or an order. Those require their
     # own envelope / managed-order records, joined later by the reader.
     enriched["evaluation_outcome"] = "SIGNAL" if record.get("fired") else "REJECT"
