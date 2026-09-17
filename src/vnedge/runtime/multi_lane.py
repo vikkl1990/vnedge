@@ -77,7 +77,9 @@ from vnedge.strategy.fee_wall_momentum_observer import FeeWallMomentumObserver
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.htf_regime_continuation_15m import HtfRegimeContinuation15mV1
 from vnedge.strategy.htf_regime_continuation_15m_v2 import HtfRegimeContinuation15mV2
-from vnedge.strategy.htf_regime_continuation_15m_v2_pairs import PAIR_STRATEGIES
+from vnedge.strategy.htf_regime_continuation_15m_v2_pairs import (
+    BTC_STRATEGY_ID, ETH_STRATEGY_ID, PAIR_STRATEGIES,
+)
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
@@ -1827,6 +1829,7 @@ async def build_lane(
         else declared_context_timeframes
     )
     context_watermarks: dict[str, datetime] = {}
+    capture_context: dict[str, pd.DataFrame] = {}
     context_binder = getattr(strategy, "bind_canonical_context", None)
     if context_timeframes and callable(context_binder):
         for context_timeframe in context_timeframes:
@@ -1853,6 +1856,7 @@ async def build_lane(
                         context_timeframe,
                     )
                     context_history = pd.DataFrame()
+            capture_context[context_timeframe] = context_history.copy(deep=True)
             context_binder(context_timeframe, context_history)
             if not context_history.empty:
                 opened = pd.Timestamp(context_history["timestamp"].iloc[-1])
@@ -1863,6 +1867,19 @@ async def build_lane(
                 context_watermarks[context_timeframe] = (
                     opened + pd.Timedelta(context_timeframe)
                 ).to_pydatetime()
+    if spec.strategy_id in {BTC_STRATEGY_ID, ETH_STRATEGY_ID}:
+        from vnedge.research.runtime_input_capture import capture_runtime_inputs
+
+        try:
+            capture_path = await asyncio.to_thread(
+                capture_runtime_inputs, root=journal_dir / "replay-inputs",
+                strategy_id=spec.strategy_id, exchange=spec.exchange,
+                frames={"15m": history.copy(deep=True), **capture_context},
+            )
+            logger.info("lane %s startup inputs captured at %s; admission is separate",
+                        spec.lane_id, capture_path)
+        except (OSError, ValueError, TypeError):
+            logger.exception("lane %s input capture failed; no evidence claim", spec.lane_id)
     exchange = SimulatedExchange(venue_fill_model(spec.exchange), config.starting_equity_usd,
                                  execution_clock=lambda: datetime.now(UTC))
     journal = DecisionJournal(

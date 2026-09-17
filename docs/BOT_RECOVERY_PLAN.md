@@ -58,9 +58,16 @@ phases. HTTP responsiveness is not a substitute for decision readiness.
    differences must be visible in reports.
    The offline tool now has an explicit `registered_context_v1` admission profile,
    registration fingerprint, causal boundary examples and read-only preflight.
-   Decision bars still require canonical provenance. Actual immutable runtime
-   input capture remains pending: the VM's raw lane caches lack that evidence
-   and correctly fail admission. No historical round trip is claimed.
+   Decision bars still require canonical provenance. A subsequent local change
+   captures the two frozen lanes' materialized startup inputs under
+   `journal_dir/replay-inputs/<strategy>/<capture>/`. A manifest marks a complete
+   capture and contains admission results. It preserves invalid rows, adds only
+   exchange identity from the runtime lane if absent, and never manufactures
+   hashes or coverage. The limit is 16 captures per registration, with explicit
+   archival required when full; capture failure is logged, never a readiness
+   claim. This is startup evidence, not every-decision or historical as-of proof.
+   The VM raw caches still correctly fail admission. No historical round trip
+   is claimed. Runtime capture deployment/verification remains pending.
 3. **Research:** freeze separate continuation, range-reclaim and compression
    hypotheses before testing. Use already-exploratory data first; protect the
    pre-registered untouched windows. Compare costs, drawdown and coverage, not
