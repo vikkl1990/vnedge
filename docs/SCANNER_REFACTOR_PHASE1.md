@@ -42,10 +42,26 @@ quality-ok canonical rows with matching persisted hashes, coverage and exact
 generates provenance, restores missing rows, or imports an untouched judgment
 window automatically. The operator must supply an already-exploratory dataset.
 
-This diagnostic intentionally requires canonical HTF inputs, stricter than v2's
-declared validated-exchange HTF context allowance. It is not a claim of full
-input parity with the deployed lane. Source-policy parity remains a separate
-acceptance item.
+The default `--source-policy canonical_only` intentionally requires canonical
+HTF inputs. Opt in to `--source-policy registered_context_v1` to admit the
+registration's `exchange_ohlcv_validated` source for **4h/1d context only**.
+Decision bars remain canonical-only. Every row still needs explicit market,
+coverage, closed-state and matching hash evidence. Missing optional trade
+measurements on official context stay null, not invented zeros. The source
+policy and registration fingerprint are recorded; this is source-policy
+alignment, not full feature/execution parity. The holding limit now comes from
+the registration (192 bars), not the generic runner default (48).
+
+For read-only admission, replace `--output ...` with `--check-inputs-only`.
+This reports all invalid input files, source counts and causal boundary context
+references. It writes nothing and exits 2 on rejection. File fingerprints are
+checked again after reading the bundle. Verified inputs do not prove sufficient
+indicator warmup or independently authenticate the original data supplier.
+
+The September 17 VM raw lane-cache preflight rejected all three BTC files for
+missing market identity. Raw cache OHLCV is not the materialized, source-labelled
+scanner input. An immutable capture of those actual runtime inputs is still
+needed; do not relabel the caches to make admission pass.
 
 The tool creates a new run directory containing input file hashes, frozen run
 configuration/cost assumptions, a chained decision journal and a summary.
@@ -70,7 +86,7 @@ Every report has `can_trade=false`, `can_promote=false`, and
    The tool reports this missing support; it never substitutes target distance
    for expected edge or invents an estimate.
 3. Settled funding, historical BBO/fill realism, verified complete historical
-   inputs and source-policy parity remain prerequisites for economic validation.
+   inputs and forward/replay feature parity remain prerequisites for economic validation.
 4. The three proposed strategy families, regime/session ablations and learned
    scoring are later phases, not implemented or activated here.
 5. No live-client, capital allowlist, risk limit, data-quality gate or deployed

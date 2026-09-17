@@ -56,6 +56,11 @@ phases. HTTP responsiveness is not a substitute for decision readiness.
    each registration's actual source policy. Validate hashes, coverage and as-of
    HTF selection. Do not stamp raw caches as verified evidence. Source-policy
    differences must be visible in reports.
+   The offline tool now has an explicit `registered_context_v1` admission profile,
+   registration fingerprint, causal boundary examples and read-only preflight.
+   Decision bars still require canonical provenance. Actual immutable runtime
+   input capture remains pending: the VM's raw lane caches lack that evidence
+   and correctly fail admission. No historical round trip is claimed.
 3. **Research:** freeze separate continuation, range-reclaim and compression
    hypotheses before testing. Use already-exploratory data first; protect the
    pre-registered untouched windows. Compare costs, drawdown and coverage, not

@@ -224,11 +224,34 @@ def assert_decision_row(
     exchange-OHLC, off-grid, or numerically invalid row.
     """
 
+    return _assert_hashed_closed_row(
+        row, timeframe=timeframe, allowed_sources=tuple(TRUSTED_PERMISSION_CANDLE_SOURCES),
+    )
+
+
+def assert_context_row(
+    row: Mapping[str, Any], *, timeframe: str, allowed_sources: Sequence[str],
+) -> ImmutableBarRef:
+    """Verify persisted context bytes under an explicitly supplied contract.
+
+    This does not grant permission to use that source for a decision candle.
+    Offline bundle admission supplies the frozen scanner's context policy.
+    """
+    return _assert_hashed_closed_row(
+        row, timeframe=timeframe, allowed_sources=allowed_sources,
+        allow_missing_optional_fields=row.get("candle_source") == "exchange_ohlcv_validated",
+    )
+
+
+def _assert_hashed_closed_row(
+    row: Mapping[str, Any], *, timeframe: str, allowed_sources: Sequence[str],
+    allow_missing_optional_fields: bool = False,
+) -> ImmutableBarRef:
     if not _true_flag(row.get("is_closed")):
         raise ValueError("decision_row_not_closed")
     if str(row.get("data_quality", "")).lower() != "ok":
         raise ValueError("decision_row_quality_not_ok")
-    source = _evidence_source(row, require_closed_truth=True)
+    source = _evidence_source(row, require_closed_truth=True, allowed_sources=allowed_sources)
     try:
         seconds = TF_SECONDS[timeframe]
     except KeyError as exc:
@@ -259,6 +282,11 @@ def assert_decision_row(
         raise ValueError("decision_row_ohlc_incoherent")
     for name in ("volume", "quote_volume", "trade_count"):
         if name not in row or row.get(name) is None:
+            continue
+        # A validated price-only context frame may have null optional trade
+        # measurements after overlay with canonical rows. They remain absent,
+        # not zero or estimated; hashing already represents them as null.
+        if allow_missing_optional_fields and pd.isna(row[name]):
             continue
         try:
             value = Decimal(str(row.get(name)))
@@ -582,6 +610,7 @@ __all__ = [
     "ImmutableBarRef",
     "MissingHtfContext",
     "assert_decision_row",
+    "assert_context_row",
     "bar_content_sha256",
     "freeze_permission_from_bound_frames",
     "freeze_permission_from_row",
