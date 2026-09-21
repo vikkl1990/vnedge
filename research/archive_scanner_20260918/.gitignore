@@ -1,0 +1,3 @@
+# Large reproducible research intermediates stay local; keep summary evidence.
+attempt_*/*_research_bars.parquet
+attempt_*/*.jsonl

@@ -1,0 +1,966 @@
+{
+  "source": "research/st4h_dc20_v1/dc20_attempt_01/bars.parquet",
+  "source_sha256": "7506e8f34660efa5253abf0358bfee3079541e71dc85f065f9fb539e58d56b31",
+  "contract_sha256": "83041873d682837c15ef310dcb3721f11f2ea7ed29330028a7fd774f88ed11d5",
+  "code_sha256": {
+    "dc20_vol.py": "cafbe02fb50bbe40c0d1caddb66f4d47e7ca2d350c23489932e7825efc4931ac",
+    "st4h_dc20.py": "79a1570a393aa008d7770930cb9875ba2e3970eb30f4c2088ae435c800729a1d"
+  },
+  "can_trade": false,
+  "can_promote": false,
+  "funding_included": false,
+  "results": [
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2025-01-01T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 8,
+        "win_rate": 0.625,
+        "pf": 1.328473682024409,
+        "net": 202.3466410219121,
+        "gross": 211.9539856686344,
+        "realized_dd": 335.9139947193282,
+        "net_excluding_largest_winner": -92.03435648695961
+      },
+      "open_position": {
+        "side": -1,
+        "entry": 75607.0,
+        "stop": 82275.0,
+        "target": 69371.0,
+        "qty": 0.013226288571164046,
+        "entry_ts": "2026-09-16T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "full",
+      "vol_mode": "off",
+      "comparison": {
+        "same_book": true,
+        "baseline_entries": 9,
+        "variant_entries": 9,
+        "shared_entry_ids": [
+          "2025-01-18T00:00:00+00:00/1",
+          "2025-02-27T00:00:00+00:00/-1",
+          "2025-05-11T00:00:00+00:00/1",
+          "2025-11-05T00:00:00+00:00/-1",
+          "2025-11-22T00:00:00+00:00/-1",
+          "2026-03-05T00:00:00+00:00/1",
+          "2026-05-23T00:00:00+00:00/-1",
+          "2026-06-04T00:00:00+00:00/-1",
+          "2026-09-16T00:00:00+00:00/-1"
+        ],
+        "removed_entry_ids": [],
+        "added_entry_ids": []
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2025-01-18T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.9591263947872803,
+          "adr_ratio": 0.95917709763182
+        },
+        {
+          "entry_ts": "2025-02-27T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 0.7818602852137333,
+          "adr_ratio": 0.7818602852137333
+        },
+        {
+          "entry_ts": "2025-05-11T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.8363443880387544,
+          "adr_ratio": 0.8363443880387544
+        },
+        {
+          "entry_ts": "2025-11-05T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 0.9701525179276885,
+          "adr_ratio": 0.9701525179276885
+        },
+        {
+          "entry_ts": "2025-11-22T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0297637661707875,
+          "adr_ratio": 1.0297637661707875
+        },
+        {
+          "entry_ts": "2026-03-05T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.9249973104462269,
+          "adr_ratio": 0.9249973104462269
+        },
+        {
+          "entry_ts": "2026-05-23T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 0.9196912492435354,
+          "adr_ratio": 0.9196912492435354
+        },
+        {
+          "entry_ts": "2026-06-04T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0691040665043885,
+          "adr_ratio": 1.0691040665043885
+        },
+        {
+          "entry_ts": "2026-09-16T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0807609319717035,
+          "adr_ratio": 1.0807609319717035
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2025-01-01T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 3,
+        "win_rate": 0.6666666666666666,
+        "pf": 2.406042876494803,
+        "net": 186.89450522240955,
+        "gross": 190.5012080838412,
+        "realized_dd": 132.92233711131806,
+        "net_excluding_largest_winner": -6.801103394842954
+      },
+      "open_position": {
+        "side": -1,
+        "entry": 62885.5,
+        "stop": 95835.0,
+        "target": 38896.5,
+        "qty": 0.015901916976091467,
+        "entry_ts": "2026-02-06T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "full",
+      "vol_mode": "atr_exp",
+      "comparison": {
+        "same_book": false,
+        "baseline_entries": 9,
+        "variant_entries": 4,
+        "shared_entry_ids": [],
+        "removed_entry_ids": [
+          "2025-01-18T00:00:00+00:00/1",
+          "2025-02-27T00:00:00+00:00/-1",
+          "2025-05-11T00:00:00+00:00/1",
+          "2025-11-05T00:00:00+00:00/-1",
+          "2025-11-22T00:00:00+00:00/-1",
+          "2026-03-05T00:00:00+00:00/1",
+          "2026-05-23T00:00:00+00:00/-1",
+          "2026-06-04T00:00:00+00:00/-1",
+          "2026-09-16T00:00:00+00:00/-1"
+        ],
+        "added_entry_ids": [
+          "2025-05-22T00:00:00+00:00/1",
+          "2025-08-26T00:00:00+00:00/-1",
+          "2025-11-15T00:00:00+00:00/-1",
+          "2026-02-06T00:00:00+00:00/-1"
+        ]
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2025-05-22T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 1.0284148477085011,
+          "adr_ratio": 1.0284148477085011
+        },
+        {
+          "entry_ts": "2025-08-26T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.1373302437450503,
+          "adr_ratio": 1.1373302437450503
+        },
+        {
+          "entry_ts": "2025-11-15T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0651485531151155,
+          "adr_ratio": 1.0651485531151155
+        },
+        {
+          "entry_ts": "2026-02-06T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.5132992867706518,
+          "adr_ratio": 1.5132992867706518
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2025-01-01T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 8,
+        "win_rate": 0.625,
+        "pf": 1.328473682024409,
+        "net": 202.3466410219121,
+        "gross": 211.9539856686344,
+        "realized_dd": 335.9139947193282,
+        "net_excluding_largest_winner": -92.03435648695961
+      },
+      "open_position": {
+        "side": -1,
+        "entry": 75607.0,
+        "stop": 82275.0,
+        "target": 69371.0,
+        "qty": 0.013226288571164046,
+        "entry_ts": "2026-09-16T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "full",
+      "vol_mode": "adr_band",
+      "comparison": {
+        "same_book": true,
+        "baseline_entries": 9,
+        "variant_entries": 9,
+        "shared_entry_ids": [
+          "2025-01-18T00:00:00+00:00/1",
+          "2025-02-27T00:00:00+00:00/-1",
+          "2025-05-11T00:00:00+00:00/1",
+          "2025-11-05T00:00:00+00:00/-1",
+          "2025-11-22T00:00:00+00:00/-1",
+          "2026-03-05T00:00:00+00:00/1",
+          "2026-05-23T00:00:00+00:00/-1",
+          "2026-06-04T00:00:00+00:00/-1",
+          "2026-09-16T00:00:00+00:00/-1"
+        ],
+        "removed_entry_ids": [],
+        "added_entry_ids": []
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2025-01-18T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.9591263947872803,
+          "adr_ratio": 0.95917709763182
+        },
+        {
+          "entry_ts": "2025-02-27T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 0.7818602852137333,
+          "adr_ratio": 0.7818602852137333
+        },
+        {
+          "entry_ts": "2025-05-11T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.8363443880387544,
+          "adr_ratio": 0.8363443880387544
+        },
+        {
+          "entry_ts": "2025-11-05T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 0.9701525179276885,
+          "adr_ratio": 0.9701525179276885
+        },
+        {
+          "entry_ts": "2025-11-22T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0297637661707875,
+          "adr_ratio": 1.0297637661707875
+        },
+        {
+          "entry_ts": "2026-03-05T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.9249973104462269,
+          "adr_ratio": 0.9249973104462269
+        },
+        {
+          "entry_ts": "2026-05-23T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 0.9196912492435354,
+          "adr_ratio": 0.9196912492435354
+        },
+        {
+          "entry_ts": "2026-06-04T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0691040665043885,
+          "adr_ratio": 1.0691040665043885
+        },
+        {
+          "entry_ts": "2026-09-16T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0807609319717035,
+          "adr_ratio": 1.0807609319717035
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2025-01-01T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 8,
+        "win_rate": 0.625,
+        "pf": 1.328473682024409,
+        "net": 202.3466410219121,
+        "gross": 211.9539856686344,
+        "realized_dd": 335.9139947193282,
+        "net_excluding_largest_winner": -92.03435648695961
+      },
+      "open_position": {
+        "side": -1,
+        "entry": 75607.0,
+        "stop": 82275.0,
+        "target": 69371.0,
+        "qty": 0.013226288571164046,
+        "entry_ts": "2026-09-16T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "full",
+      "vol_mode": "skip_comp",
+      "comparison": {
+        "same_book": true,
+        "baseline_entries": 9,
+        "variant_entries": 9,
+        "shared_entry_ids": [
+          "2025-01-18T00:00:00+00:00/1",
+          "2025-02-27T00:00:00+00:00/-1",
+          "2025-05-11T00:00:00+00:00/1",
+          "2025-11-05T00:00:00+00:00/-1",
+          "2025-11-22T00:00:00+00:00/-1",
+          "2026-03-05T00:00:00+00:00/1",
+          "2026-05-23T00:00:00+00:00/-1",
+          "2026-06-04T00:00:00+00:00/-1",
+          "2026-09-16T00:00:00+00:00/-1"
+        ],
+        "removed_entry_ids": [],
+        "added_entry_ids": []
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2025-01-18T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.9591263947872803,
+          "adr_ratio": 0.95917709763182
+        },
+        {
+          "entry_ts": "2025-02-27T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 0.7818602852137333,
+          "adr_ratio": 0.7818602852137333
+        },
+        {
+          "entry_ts": "2025-05-11T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.8363443880387544,
+          "adr_ratio": 0.8363443880387544
+        },
+        {
+          "entry_ts": "2025-11-05T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 0.9701525179276885,
+          "adr_ratio": 0.9701525179276885
+        },
+        {
+          "entry_ts": "2025-11-22T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0297637661707875,
+          "adr_ratio": 1.0297637661707875
+        },
+        {
+          "entry_ts": "2026-03-05T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.9249973104462269,
+          "adr_ratio": 0.9249973104462269
+        },
+        {
+          "entry_ts": "2026-05-23T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 0.9196912492435354,
+          "adr_ratio": 0.9196912492435354
+        },
+        {
+          "entry_ts": "2026-06-04T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0691040665043885,
+          "adr_ratio": 1.0691040665043885
+        },
+        {
+          "entry_ts": "2026-09-16T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0807609319717035,
+          "adr_ratio": 1.0807609319717035
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2025-01-01T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 7,
+        "win_rate": 0.5714285714285714,
+        "pf": 1.01956356482263,
+        "net": 11.56245609882069,
+        "gross": 19.843942619105917,
+        "realized_dd": 280.106868123728,
+        "net_excluding_largest_winner": -237.98309659985034
+      },
+      "open_position": {
+        "side": -1,
+        "entry": 75607.0,
+        "stop": 82275.0,
+        "target": 69371.0,
+        "qty": 0.013226288571164046,
+        "entry_ts": "2026-09-16T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "full",
+      "vol_mode": "atr_mid",
+      "comparison": {
+        "same_book": false,
+        "baseline_entries": 9,
+        "variant_entries": 8,
+        "shared_entry_ids": [
+          "2025-01-18T00:00:00+00:00/1",
+          "2026-03-05T00:00:00+00:00/1",
+          "2026-05-23T00:00:00+00:00/-1",
+          "2026-06-04T00:00:00+00:00/-1",
+          "2026-09-16T00:00:00+00:00/-1"
+        ],
+        "removed_entry_ids": [
+          "2025-02-27T00:00:00+00:00/-1",
+          "2025-05-11T00:00:00+00:00/1",
+          "2025-11-05T00:00:00+00:00/-1",
+          "2025-11-22T00:00:00+00:00/-1"
+        ],
+        "added_entry_ids": [
+          "2025-04-23T00:00:00+00:00/1",
+          "2025-05-23T00:00:00+00:00/1",
+          "2025-11-18T00:00:00+00:00/-1"
+        ]
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2025-01-18T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.9591263947872803,
+          "adr_ratio": 0.95917709763182
+        },
+        {
+          "entry_ts": "2025-04-23T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.9216602282261284,
+          "adr_ratio": 0.9216602282261284
+        },
+        {
+          "entry_ts": "2025-05-23T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.9444954395680262,
+          "adr_ratio": 0.9444954395680262
+        },
+        {
+          "entry_ts": "2025-11-18T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0781957926054737,
+          "adr_ratio": 1.0781957926054737
+        },
+        {
+          "entry_ts": "2026-03-05T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.9249973104462269,
+          "adr_ratio": 0.9249973104462269
+        },
+        {
+          "entry_ts": "2026-05-23T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 0.9196912492435354,
+          "adr_ratio": 0.9196912492435354
+        },
+        {
+          "entry_ts": "2026-06-04T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0691040665043885,
+          "adr_ratio": 1.0691040665043885
+        },
+        {
+          "entry_ts": "2026-09-16T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0807609319717035,
+          "adr_ratio": 1.0807609319717035
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2026-06-22T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 1,
+        "win_rate": 1.0,
+        "pf": null,
+        "net": 105.344105917997,
+        "gross": 106.6023807326751,
+        "realized_dd": 0.0,
+        "net_excluding_largest_winner": 0.0
+      },
+      "open_position": {
+        "side": 1,
+        "entry": 78317.5,
+        "stop": 62245.0,
+        "target": 89457.5,
+        "qty": 0.012768538321575637,
+        "entry_ts": "2026-08-22T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "90d",
+      "vol_mode": "off",
+      "comparison": {
+        "same_book": true,
+        "baseline_entries": 2,
+        "variant_entries": 2,
+        "shared_entry_ids": [
+          "2026-07-15T00:00:00+00:00/1",
+          "2026-08-22T00:00:00+00:00/1"
+        ],
+        "removed_entry_ids": [],
+        "added_entry_ids": []
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2026-07-15T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.8965436930562484,
+          "adr_ratio": 0.8966032748868169
+        },
+        {
+          "entry_ts": "2026-08-22T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 1.1985862074476452,
+          "adr_ratio": 1.1985862074476452
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2026-06-22T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 1,
+        "win_rate": 1.0,
+        "pf": null,
+        "net": 109.17802953202155,
+        "gross": 110.43688489223415,
+        "realized_dd": 0.0,
+        "net_excluding_largest_winner": 0.0
+      },
+      "open_position": {
+        "side": -1,
+        "entry": 75607.0,
+        "stop": 82275.0,
+        "target": 69371.0,
+        "qty": 0.013226288571164046,
+        "entry_ts": "2026-09-16T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "90d",
+      "vol_mode": "atr_exp",
+      "comparison": {
+        "same_book": false,
+        "baseline_entries": 2,
+        "variant_entries": 2,
+        "shared_entry_ids": [],
+        "removed_entry_ids": [
+          "2026-07-15T00:00:00+00:00/1",
+          "2026-08-22T00:00:00+00:00/1"
+        ],
+        "added_entry_ids": [
+          "2026-08-21T00:00:00+00:00/1",
+          "2026-09-16T00:00:00+00:00/-1"
+        ]
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2026-08-21T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 1.0222254165005837,
+          "adr_ratio": 1.0222254165005837
+        },
+        {
+          "entry_ts": "2026-09-16T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0807609319717035,
+          "adr_ratio": 1.0807609319717035
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2026-06-22T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 1,
+        "win_rate": 1.0,
+        "pf": null,
+        "net": 105.344105917997,
+        "gross": 106.6023807326751,
+        "realized_dd": 0.0,
+        "net_excluding_largest_winner": 0.0
+      },
+      "open_position": {
+        "side": 1,
+        "entry": 78317.5,
+        "stop": 62245.0,
+        "target": 89457.5,
+        "qty": 0.012768538321575637,
+        "entry_ts": "2026-08-22T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "90d",
+      "vol_mode": "adr_band",
+      "comparison": {
+        "same_book": true,
+        "baseline_entries": 2,
+        "variant_entries": 2,
+        "shared_entry_ids": [
+          "2026-07-15T00:00:00+00:00/1",
+          "2026-08-22T00:00:00+00:00/1"
+        ],
+        "removed_entry_ids": [],
+        "added_entry_ids": []
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2026-07-15T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.8965436930562484,
+          "adr_ratio": 0.8966032748868169
+        },
+        {
+          "entry_ts": "2026-08-22T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 1.1985862074476452,
+          "adr_ratio": 1.1985862074476452
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2026-06-22T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 1,
+        "win_rate": 1.0,
+        "pf": null,
+        "net": 105.344105917997,
+        "gross": 106.6023807326751,
+        "realized_dd": 0.0,
+        "net_excluding_largest_winner": 0.0
+      },
+      "open_position": {
+        "side": 1,
+        "entry": 78317.5,
+        "stop": 62245.0,
+        "target": 89457.5,
+        "qty": 0.012768538321575637,
+        "entry_ts": "2026-08-22T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "90d",
+      "vol_mode": "skip_comp",
+      "comparison": {
+        "same_book": true,
+        "baseline_entries": 2,
+        "variant_entries": 2,
+        "shared_entry_ids": [
+          "2026-07-15T00:00:00+00:00/1",
+          "2026-08-22T00:00:00+00:00/1"
+        ],
+        "removed_entry_ids": [],
+        "added_entry_ids": []
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2026-07-15T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.8965436930562484,
+          "adr_ratio": 0.8966032748868169
+        },
+        {
+          "entry_ts": "2026-08-22T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 1.1985862074476452,
+          "adr_ratio": 1.1985862074476452
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2026-06-22T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 1,
+        "win_rate": 1.0,
+        "pf": null,
+        "net": 105.344105917997,
+        "gross": 106.6023807326751,
+        "realized_dd": 0.0,
+        "net_excluding_largest_winner": 0.0
+      },
+      "open_position": {
+        "side": 1,
+        "entry": 78317.5,
+        "stop": 62245.0,
+        "target": 89457.5,
+        "qty": 0.012768538321575637,
+        "entry_ts": "2026-08-22T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "90d",
+      "vol_mode": "atr_mid",
+      "comparison": {
+        "same_book": true,
+        "baseline_entries": 2,
+        "variant_entries": 2,
+        "shared_entry_ids": [
+          "2026-07-15T00:00:00+00:00/1",
+          "2026-08-22T00:00:00+00:00/1"
+        ],
+        "removed_entry_ids": [],
+        "added_entry_ids": []
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2026-07-15T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 0.8965436930562484,
+          "adr_ratio": 0.8966032748868169
+        },
+        {
+          "entry_ts": "2026-08-22T00:00:00+00:00",
+          "side": 1,
+          "atr_ratio": 1.1985862074476452,
+          "adr_ratio": 1.1985862074476452
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2026-09-06T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 0,
+        "win_rate": null,
+        "pf": null,
+        "net": 0.0,
+        "gross": 0,
+        "realized_dd": 0.0,
+        "net_excluding_largest_winner": 0.0
+      },
+      "open_position": {
+        "side": -1,
+        "entry": 75607.0,
+        "stop": 82275.0,
+        "target": 69371.0,
+        "qty": 0.013226288571164046,
+        "entry_ts": "2026-09-16T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "14d",
+      "vol_mode": "off",
+      "comparison": {
+        "same_book": true,
+        "baseline_entries": 1,
+        "variant_entries": 1,
+        "shared_entry_ids": [
+          "2026-09-16T00:00:00+00:00/-1"
+        ],
+        "removed_entry_ids": [],
+        "added_entry_ids": []
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2026-09-16T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0807609319717035,
+          "adr_ratio": 1.0807609319717035
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2026-09-06T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 0,
+        "win_rate": null,
+        "pf": null,
+        "net": 0.0,
+        "gross": 0,
+        "realized_dd": 0.0,
+        "net_excluding_largest_winner": 0.0
+      },
+      "open_position": {
+        "side": -1,
+        "entry": 75607.0,
+        "stop": 82275.0,
+        "target": 69371.0,
+        "qty": 0.013226288571164046,
+        "entry_ts": "2026-09-16T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "14d",
+      "vol_mode": "atr_exp",
+      "comparison": {
+        "same_book": true,
+        "baseline_entries": 1,
+        "variant_entries": 1,
+        "shared_entry_ids": [
+          "2026-09-16T00:00:00+00:00/-1"
+        ],
+        "removed_entry_ids": [],
+        "added_entry_ids": []
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2026-09-16T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0807609319717035,
+          "adr_ratio": 1.0807609319717035
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2026-09-06T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 0,
+        "win_rate": null,
+        "pf": null,
+        "net": 0.0,
+        "gross": 0,
+        "realized_dd": 0.0,
+        "net_excluding_largest_winner": 0.0
+      },
+      "open_position": {
+        "side": -1,
+        "entry": 75607.0,
+        "stop": 82275.0,
+        "target": 69371.0,
+        "qty": 0.013226288571164046,
+        "entry_ts": "2026-09-16T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "14d",
+      "vol_mode": "adr_band",
+      "comparison": {
+        "same_book": true,
+        "baseline_entries": 1,
+        "variant_entries": 1,
+        "shared_entry_ids": [
+          "2026-09-16T00:00:00+00:00/-1"
+        ],
+        "removed_entry_ids": [],
+        "added_entry_ids": []
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2026-09-16T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0807609319717035,
+          "adr_ratio": 1.0807609319717035
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2026-09-06T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 0,
+        "win_rate": null,
+        "pf": null,
+        "net": 0.0,
+        "gross": 0,
+        "realized_dd": 0.0,
+        "net_excluding_largest_winner": 0.0
+      },
+      "open_position": {
+        "side": -1,
+        "entry": 75607.0,
+        "stop": 82275.0,
+        "target": 69371.0,
+        "qty": 0.013226288571164046,
+        "entry_ts": "2026-09-16T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "14d",
+      "vol_mode": "skip_comp",
+      "comparison": {
+        "same_book": true,
+        "baseline_entries": 1,
+        "variant_entries": 1,
+        "shared_entry_ids": [
+          "2026-09-16T00:00:00+00:00/-1"
+        ],
+        "removed_entry_ids": [],
+        "added_entry_ids": []
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2026-09-16T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0807609319717035,
+          "adr_ratio": 1.0807609319717035
+        }
+      ]
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2026-09-06T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 0,
+        "win_rate": null,
+        "pf": null,
+        "net": 0.0,
+        "gross": 0,
+        "realized_dd": 0.0,
+        "net_excluding_largest_winner": 0.0
+      },
+      "open_position": {
+        "side": -1,
+        "entry": 75607.0,
+        "stop": 82275.0,
+        "target": 69371.0,
+        "qty": 0.013226288571164046,
+        "entry_ts": "2026-09-16T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "14d",
+      "vol_mode": "atr_mid",
+      "comparison": {
+        "same_book": true,
+        "baseline_entries": 1,
+        "variant_entries": 1,
+        "shared_entry_ids": [
+          "2026-09-16T00:00:00+00:00/-1"
+        ],
+        "removed_entry_ids": [],
+        "added_entry_ids": []
+      },
+      "entry_ratios": [
+        {
+          "entry_ts": "2026-09-16T00:00:00+00:00",
+          "side": -1,
+          "atr_ratio": 1.0807609319717035,
+          "adr_ratio": 1.0807609319717035
+        }
+      ]
+    }
+  ]
+}

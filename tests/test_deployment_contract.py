@@ -27,3 +27,19 @@ def test_default_compose_has_no_live_order_service() -> None:
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assert "vnedge.runtime.live_trader" not in compose
     assert "vnedge.runtime.paper_trial" not in compose
+
+
+def test_vm_wrapper_preserves_data_and_uses_guarded_deployer() -> None:
+    wrapper = (ROOT / "scripts" / "deploy_vm.sh").read_text()
+    assert "docker builder prune --force --filter until=168h" in wrapper
+    assert "docker system prune" not in wrapper
+    assert "docker volume prune" not in wrapper
+    assert "docker compose down" not in wrapper
+    assert "VNEDGE_EXPECTED_SHA" in wrapper
+    assert 'git show "$expected:scripts/deploy.sh"' in wrapper
+    assert "vnedge-rollback:" in wrapper
+
+
+def test_expected_revision_is_checked_before_merge() -> None:
+    script = (ROOT / "scripts" / "deploy.sh").read_text()
+    assert script.index("VNEDGE_EXPECTED_SHA") < script.index("git merge --ff-only origin/main")

@@ -1,0 +1,193 @@
+{
+  "config": {
+    "range_days": 10,
+    "fill": "next_open",
+    "b_delta": "disabled",
+    "notional": 1000.0,
+    "fee": 0.00059,
+    "slip": 0.5,
+    "comp_min": 0.75
+  },
+  "trades": [
+    {
+      "book": "A",
+      "side": -1,
+      "entry": 75608.0,
+      "stop": 80537.0,
+      "target": 71110.0,
+      "break_line": 76039.0,
+      "qty": 0.013226113638768385,
+      "entry_ts": "2026-09-16T00:00:00+00:00",
+      "exit": 76180.0,
+      "exit_ts": "2026-09-17T00:00:00+00:00",
+      "reason": "kill",
+      "gross_usd": -7.565337001375516,
+      "fees_usd": 1.1844635488308117,
+      "slippage_usd": 0.013226113638768385,
+      "net_usd": -8.763026663845096,
+      "net_bps": -87.63026663845095
+    }
+  ],
+  "events": [
+    {
+      "day": "2026-09-06T00:00:00+00:00",
+      "as_of": "2026-09-07T00:00:00+00:00",
+      "A": "WAIT",
+      "A_at_07": "FLAT",
+      "B": "DISABLED",
+      "A_position": null
+    },
+    {
+      "day": "2026-09-07T00:00:00+00:00",
+      "as_of": "2026-09-08T00:00:00+00:00",
+      "A": "WAIT",
+      "A_at_07": "FLAT",
+      "B": "DISABLED",
+      "A_position": null
+    },
+    {
+      "day": "2026-09-08T00:00:00+00:00",
+      "as_of": "2026-09-09T00:00:00+00:00",
+      "A": "WAIT",
+      "A_at_07": "FLAT",
+      "B": "DISABLED",
+      "A_position": null
+    },
+    {
+      "day": "2026-09-09T00:00:00+00:00",
+      "as_of": "2026-09-10T00:00:00+00:00",
+      "A": "WAIT",
+      "A_at_07": "FLAT",
+      "B": "DISABLED",
+      "A_position": null
+    },
+    {
+      "day": "2026-09-10T00:00:00+00:00",
+      "as_of": "2026-09-11T00:00:00+00:00",
+      "A": "WAIT",
+      "A_at_07": "FLAT",
+      "B": "DISABLED",
+      "A_position": null
+    },
+    {
+      "day": "2026-09-11T00:00:00+00:00",
+      "as_of": "2026-09-12T00:00:00+00:00",
+      "A": "WAIT",
+      "A_at_07": "FLAT",
+      "B": "DISABLED",
+      "A_position": null
+    },
+    {
+      "day": "2026-09-12T00:00:00+00:00",
+      "as_of": "2026-09-13T00:00:00+00:00",
+      "A": "WAIT",
+      "A_at_07": "FLAT",
+      "B": "DISABLED",
+      "A_position": null
+    },
+    {
+      "day": "2026-09-13T00:00:00+00:00",
+      "as_of": "2026-09-14T00:00:00+00:00",
+      "A": "WAIT",
+      "A_at_07": "FLAT",
+      "B": "DISABLED",
+      "A_position": null
+    },
+    {
+      "day": "2026-09-14T00:00:00+00:00",
+      "as_of": "2026-09-15T00:00:00+00:00",
+      "A": "WAIT",
+      "A_at_07": "FLAT",
+      "B": "DISABLED",
+      "A_position": null
+    },
+    {
+      "day": "2026-09-15T00:00:00+00:00",
+      "as_of": "2026-09-16T00:00:00+00:00",
+      "A": "SIGNAL",
+      "A_at_07": "FLAT",
+      "B": "DISABLED",
+      "A_position": null
+    },
+    {
+      "day": "2026-09-16T00:00:00+00:00",
+      "as_of": "2026-09-17T00:00:00+00:00",
+      "A": "EXIT",
+      "A_at_07": "IN_SHORT",
+      "B": "DISABLED",
+      "A_position": null
+    },
+    {
+      "day": "2026-09-17T00:00:00+00:00",
+      "as_of": "2026-09-18T00:00:00+00:00",
+      "A": "WAIT",
+      "A_at_07": "FLAT",
+      "B": "DISABLED",
+      "A_position": null
+    },
+    {
+      "day": "2026-09-18T00:00:00+00:00",
+      "as_of": "2026-09-19T00:00:00+00:00",
+      "A": "SIGNAL",
+      "A_at_07": "FLAT",
+      "B": "DISABLED",
+      "A_position": null
+    },
+    {
+      "day": "2026-09-19T00:00:00+00:00",
+      "as_of": "2026-09-20T00:00:00+00:00",
+      "A": "MANAGE",
+      "A_at_07": "IN_LONG",
+      "B": "DISABLED",
+      "A_position": {
+        "book": "A",
+        "side": 1,
+        "entry": 80878.5,
+        "stop": 74916.5,
+        "target": 85830.5,
+        "break_line": 79868.5,
+        "qty": 0.012364225350371235,
+        "entry_ts": "2026-09-19T00:00:00+00:00"
+      }
+    }
+  ],
+  "open_A": {
+    "book": "A",
+    "side": 1,
+    "entry": 80878.5,
+    "stop": 74916.5,
+    "target": 85830.5,
+    "break_line": 79868.5,
+    "qty": 0.012364225350371235,
+    "entry_ts": "2026-09-19T00:00:00+00:00"
+  },
+  "pending_A": null,
+  "unresolved_A": false,
+  "unresolved_B": null,
+  "window": "14d",
+  "start": "2026-09-06T00:00:00+00:00",
+  "end_exclusive": "2026-09-20T00:00:00+00:00",
+  "metrics": {
+    "A": {
+      "trades": 1,
+      "gross_usd": -7.565337001375516,
+      "net_usd": -8.763026663845096,
+      "mean_net_bps": -87.63026663845095,
+      "win_fraction": 0.0,
+      "pf": 0.0,
+      "realized_cash_drawdown_usd": 8.763026663845096
+    },
+    "B": {
+      "trades": 0
+    },
+    "combined": {
+      "trades": 1,
+      "gross_usd": -7.565337001375516,
+      "net_usd": -8.763026663845096,
+      "mean_net_bps": -87.63026663845095,
+      "win_fraction": 0.0,
+      "pf": 0.0,
+      "realized_cash_drawdown_usd": 8.763026663845096
+    }
+  }
+}

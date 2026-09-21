@@ -1,0 +1,216 @@
+{
+  "scanner": "DC20",
+  "atr_kind": null,
+  "start": "2026-09-06T00:00:00+00:00",
+  "end_exclusive": "2026-09-20T00:00:00+00:00",
+  "metrics": {
+    "n": 0,
+    "win_rate": null,
+    "pf": null,
+    "net": 0.0,
+    "gross": 0,
+    "realized_dd": 0.0,
+    "net_excluding_largest_winner": 0.0
+  },
+  "open_position": {
+    "side": -1,
+    "entry": 75607.0,
+    "stop": 82275.0,
+    "target": 69371.0,
+    "qty": 0.013226288571164046,
+    "entry_ts": "2026-09-16T00:00:00+00:00"
+  },
+  "unresolved": false,
+  "trades": [],
+  "events": [
+    {
+      "bar_open": "2026-09-06T00:00:00+00:00",
+      "bar_close": "2026-09-07T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 62729.5,
+      "rng": 19545.5,
+      "atr_ratio": 1.2872626739462418,
+      "adr_ratio": 1.2872626739462418,
+      "action": "WAIT",
+      "notes": []
+    },
+    {
+      "bar_open": "2026-09-07T00:00:00+00:00",
+      "bar_close": "2026-09-08T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 64008.0,
+      "rng": 18267.0,
+      "atr_ratio": 1.2168506534703718,
+      "adr_ratio": 1.2168506534703718,
+      "action": "WAIT",
+      "notes": []
+    },
+    {
+      "bar_open": "2026-09-08T00:00:00+00:00",
+      "bar_close": "2026-09-09T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 64137.5,
+      "rng": 18137.5,
+      "atr_ratio": 1.161260045244464,
+      "adr_ratio": 1.161260045244464,
+      "action": "WAIT",
+      "notes": []
+    },
+    {
+      "bar_open": "2026-09-09T00:00:00+00:00",
+      "bar_close": "2026-09-10T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 68898.0,
+      "rng": 13377.0,
+      "atr_ratio": 1.1738922081019734,
+      "adr_ratio": 1.1738922081019734,
+      "action": "WAIT",
+      "notes": []
+    },
+    {
+      "bar_open": "2026-09-10T00:00:00+00:00",
+      "bar_close": "2026-09-11T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 73000.0,
+      "rng": 9275.0,
+      "atr_ratio": 1.156112225456337,
+      "adr_ratio": 1.156112225456337,
+      "action": "WAIT",
+      "notes": []
+    },
+    {
+      "bar_open": "2026-09-11T00:00:00+00:00",
+      "bar_close": "2026-09-12T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 75595.5,
+      "rng": 6679.5,
+      "atr_ratio": 1.1049125810482403,
+      "adr_ratio": 1.1049125810482403,
+      "action": "WAIT",
+      "notes": []
+    },
+    {
+      "bar_open": "2026-09-12T00:00:00+00:00",
+      "bar_close": "2026-09-13T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 75595.5,
+      "rng": 6679.5,
+      "atr_ratio": 1.1049528428225024,
+      "adr_ratio": 1.1049528428225024,
+      "action": "WAIT",
+      "notes": []
+    },
+    {
+      "bar_open": "2026-09-13T00:00:00+00:00",
+      "bar_close": "2026-09-14T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 76039.0,
+      "rng": 6236.0,
+      "atr_ratio": 1.0489140692047192,
+      "adr_ratio": 1.0489140692047192,
+      "action": "WAIT",
+      "notes": []
+    },
+    {
+      "bar_open": "2026-09-14T00:00:00+00:00",
+      "bar_close": "2026-09-15T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 76039.0,
+      "rng": 6236.0,
+      "atr_ratio": 1.0761455195980463,
+      "adr_ratio": 1.0761455195980463,
+      "action": "WAIT",
+      "notes": []
+    },
+    {
+      "bar_open": "2026-09-15T00:00:00+00:00",
+      "bar_close": "2026-09-16T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 76039.0,
+      "rng": 6236.0,
+      "atr_ratio": 1.0807609319717035,
+      "adr_ratio": 1.0807609319717035,
+      "action": "SIGNAL",
+      "side": -1,
+      "entry": 75607.0,
+      "stop": 82275.0,
+      "target": 69371.0,
+      "qty": 0.013226288571164046,
+      "entry_ts": "2026-09-16T00:00:00+00:00"
+    },
+    {
+      "bar_open": "2026-09-16T00:00:00+00:00",
+      "bar_close": "2026-09-17T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 74916.5,
+      "rng": 7358.5,
+      "atr_ratio": 1.077536983407062,
+      "adr_ratio": 1.077536983407062,
+      "action": "MANAGE"
+    },
+    {
+      "bar_open": "2026-09-17T00:00:00+00:00",
+      "bar_close": "2026-09-18T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 74916.5,
+      "rng": 7358.5,
+      "atr_ratio": 0.9363656810671465,
+      "adr_ratio": 0.9363656810671465,
+      "action": "MANAGE"
+    },
+    {
+      "bar_open": "2026-09-18T00:00:00+00:00",
+      "bar_close": "2026-09-19T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 74916.5,
+      "rng": 7358.5,
+      "atr_ratio": 0.9837429865246278,
+      "adr_ratio": 0.9837429865246278,
+      "action": "MANAGE"
+    },
+    {
+      "bar_open": "2026-09-19T00:00:00+00:00",
+      "bar_close": "2026-09-20T00:00:00+00:00",
+      "vol_mode": "adr_band",
+      "hh": 82275.0,
+      "ll": 74916.5,
+      "rng": 7358.5,
+      "atr_ratio": 1.0131612086393618,
+      "adr_ratio": 1.0131612086393618,
+      "action": "MANAGE"
+    }
+  ],
+  "window": "14d",
+  "vol_mode": "adr_band",
+  "comparison": {
+    "same_book": true,
+    "baseline_entries": 1,
+    "variant_entries": 1,
+    "shared_entry_ids": [
+      "2026-09-16T00:00:00+00:00/-1"
+    ],
+    "removed_entry_ids": [],
+    "added_entry_ids": []
+  },
+  "entry_ratios": [
+    {
+      "entry_ts": "2026-09-16T00:00:00+00:00",
+      "side": -1,
+      "atr_ratio": 1.0807609319717035,
+      "adr_ratio": 1.0807609319717035
+    }
+  ]
+}

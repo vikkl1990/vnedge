@@ -245,6 +245,35 @@ def test_feed_market_state_fails_closed_on_application_data_silence():
     assert healthy.data_quality == "ok"
 
 
+def test_delta_venue_status_denies_entries_even_when_socket_is_fresh():
+    from vnedge.exchange.heartbeat import HeartbeatStatus
+
+    feed = DeltaWsFeed.__new__(DeltaWsFeed)
+    feed.symbol = "BTC/USD:USD"
+    feed.quote = (100.0, 100.1)
+    feed.slippage_est_bps = 2.0
+    feed.funding_rate = 0.0
+    feed.healthy = True
+    feed.data_silence_seconds = 60.0
+    feed.last_event_at = datetime.now(UTC)
+
+    class Ws:
+        system_status = None
+
+        def heartbeat_status(self):
+            return HeartbeatStatus.OK
+
+    feed._ws = Ws()
+    unreported = feed.market_state()
+    assert not unreported.exchange_healthy
+    assert "unreported" in unreported.data_quality_reason
+    feed._ws.system_status = "degraded_mode"
+    degraded = feed.market_state()
+    assert not degraded.exchange_healthy
+    feed._ws.system_status = "live"
+    assert feed.market_state().exchange_healthy
+
+
 class _HistExchange:
     """Fake ccxt exchange: settled funding history support."""
     has = {"fetchFundingRateHistory": True}

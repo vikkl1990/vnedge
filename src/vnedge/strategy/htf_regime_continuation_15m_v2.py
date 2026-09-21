@@ -18,6 +18,11 @@ from typing import Final
 
 import pandas as pd
 
+from vnedge.strategy.continuation_rules import (
+    assess_continuation,
+    diagnostic_flag,
+    setup_masks,
+)
 from vnedge.strategy.htf_regime_continuation_15m import (
     HtfRegimeContinuation15mV1,
 )
@@ -84,38 +89,7 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
         """Apply V2's explicit OHLC structure rules to a prepared frame."""
         out["mreg_structure_source"] = "canonical_ohlc_price_only_v1"
         out["mreg_avwap_source"] = "unavailable"
-        p = self.params
-        ready = out["bos15_structure_ready"].fillna(False).astype(bool)
-        quality = out["bos15_quality_ok"].eq(1)
-        trend = out["bos15_structure_trend"].astype(str)
-        meaningful = (
-            pd.to_numeric(out["hsc_volume_ratio"], errors="coerce").ge(p.volume_mult)
-            & pd.to_numeric(out["hsc_body_bps"], errors="coerce").ge(
-                p.min_reclaim_body_bps
-            )
-        )
-        long_ready = (
-            ready
-            & quality
-            & trend.eq("up")
-            & meaningful
-            & out["hsc_pullback_long"].eq(1)
-            & pd.to_numeric(
-                out["hsc_projected_net_long_bps"], errors="coerce"
-            ).ge(p.min_projected_net_bps)
-            & out["mreg_allow_long"].eq(1)
-        )
-        short_ready = (
-            ready
-            & quality
-            & trend.eq("down")
-            & meaningful
-            & out["hsc_pullback_short"].eq(1)
-            & pd.to_numeric(
-                out["hsc_projected_net_short_bps"], errors="coerce"
-            ).ge(p.min_projected_net_bps)
-            & out["mreg_allow_short"].eq(1)
-        )
+        long_ready, short_ready = setup_masks(out, self.params)
         out["rt_allow_long"] = long_ready.astype(float)
         out["rt_allow_short"] = short_ready.astype(float)
         out["rt_arm_ready"] = (long_ready | short_ready).astype(float)
@@ -130,38 +104,19 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
         row = df.iloc[index]
 
         def flag(name: str) -> bool:
-            try:
-                value = row.get(name, 0)
-                return not pd.isna(value) and bool(float(value))
-            except (TypeError, ValueError):
-                return False
+            return diagnostic_flag(row, name)
 
-        side_ready = flag("rt_allow_long") or flag("rt_allow_short")
-        regime_side = flag("mreg_allow_long") or flag("mreg_allow_short")
-        structure_side = str(row.get("bos15_structure_trend")) in {"up", "down"}
-        meaningful = (
-            float(row.get("hsc_volume_ratio", 0)) >= self.params.volume_mult
-            and float(row.get("hsc_body_bps", 0)) >= self.params.min_reclaim_body_bps
-        )
-        pullback = flag("hsc_pullback_long") or flag("hsc_pullback_short")
         missing_context = self._missing_permission_context(row)
         health = structure_health_diagnostics(row)
-        checks = (
-            (not missing_context, "htf_context_missing"),
-            (flag("bos15_parent_identity_ok"), "structure_parent_missing"),
-            (health.get("bos15_structure_health_reason") != "structure_parent_ineligible",
-             "gap_parent"),
-            (flag("mreg_ready"), "market_regime_not_ready"),
-            (str(row.get("mreg_state")) == "continuation", "regime_flat"),
-            (regime_side, "family_mismatch"),
-            (flag("bos15_structure_ready"), "structure_not_ready"),
-            (flag("bos15_quality_ok"), "data_quality_not_ok"),
-            (structure_side, "one_hour_structure_unresolved"),
-            (meaningful, "reclaim_not_meaningful"),
-            (pullback, "closed_15m_reclaim_missing"),
-            (side_ready, "side_alignment_missing"),
+        assessment = assess_continuation(
+            row,
+            self.params,
+            context_missing=bool(missing_context),
+            parent_ineligible=(
+                health.get("bos15_structure_health_reason")
+                == "structure_parent_ineligible"
+            ),
         )
-        failures = [reason for ok, reason in checks if not ok]
         features = dict(diagnostics.get("features", {}))
         features.update(
             {
@@ -178,9 +133,9 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
             }
         )
         diagnostics["features"] = features
-        diagnostics["eligible"] = side_ready and not missing_context
-        diagnostics["all_failed_gates"] = failures
-        diagnostics["primary_failed_gate"] = failures[0] if failures else None
+        diagnostics["eligible"] = assessment.eligible
+        diagnostics["all_failed_gates"] = list(assessment.failed_gates)
+        diagnostics["primary_failed_gate"] = assessment.primary_failed_gate
         return diagnostics
 
     def _new_regime_machine(self) -> MarketRegimeMachine:

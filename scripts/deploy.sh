@@ -29,6 +29,10 @@ fi
 DEPLOY_START=$(date +%s)
 PREV=$(git rev-parse HEAD)
 git fetch --prune origin
+if [ -n "${VNEDGE_EXPECTED_SHA:-}" ] && [ "$(git rev-parse origin/main)" != "$VNEDGE_EXPECTED_SHA" ]; then
+    echo "origin/main differs from requested deployment SHA — refusing" >&2
+    exit 1
+fi
 git merge --ff-only origin/main
 HEAD_SHA=$(git rev-parse HEAD)
 echo "deploying $(git rev-parse --short HEAD)"

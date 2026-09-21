@@ -14,7 +14,6 @@ from typing import Final, Literal
 
 import pandas as pd
 
-from vnedge.data.bar_identity import bar_content_sha256
 from vnedge.data.candles import Candle
 from vnedge.strategy.arm_evidence import (
     FrozenPermissionSnapshot,
@@ -23,6 +22,7 @@ from vnedge.strategy.arm_evidence import (
     missing_bound_context,
 )
 from vnedge.strategy.base_strategy import SignalIntent, StrategyExitIntent
+from vnedge.strategy.continuation_context import ContinuationContext, annotate_regimes
 from vnedge.strategy.market_regime import (
     DEFAULT_CONFIG,
     MarketRegime,
@@ -46,44 +46,6 @@ STRATEGY_SPEC = MappingProxyType(
 )
 
 
-def _context_frame(candles: pd.DataFrame) -> pd.DataFrame:
-    if candles.empty:
-        return candles.copy()
-    frame = candles.copy()
-    if "timestamp" not in frame.columns and "open_time" in frame.columns:
-        frame = frame.rename(columns={"open_time": "timestamp"})
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
-    return frame.sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(
-        drop=True
-    )
-
-
-def _append_candle(frame: pd.DataFrame, candle: Candle) -> pd.DataFrame:
-    values: dict[str, object] = {
-        "timestamp": candle.open_time,
-        "open": float(candle.open),
-        "high": float(candle.high),
-        "low": float(candle.low),
-        "close": float(candle.close),
-        "volume": float(candle.volume),
-        "quote_volume": float(candle.quote_volume),
-        "trade_count": candle.trade_count,
-        "vwap": float(candle.vwap) if candle.vwap is not None else math.nan,
-        "is_closed": True,
-        "data_quality": "ok",
-        "coverage_ok": True,
-        "timeframe": candle.timeframe,
-        "symbol": candle.symbol,
-        "candle_source": "canonical_tick_lake",
-    }
-    values["content_sha256"] = bar_content_sha256(
-        values,
-        open_time=candle.open_time,
-        close_time=candle.close_time,
-        source="canonical_tick_lake",
-    )
-    row = pd.DataFrame([values])
-    return _context_frame(pd.concat([frame, row], ignore_index=True)).tail(800).reset_index(drop=True)
 
 
 class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
@@ -100,33 +62,7 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
         return MarketRegimeMachine(self.market_regime_config)
 
     def _context_identity(self, decision_at: pd.Timestamp) -> tuple[object, ...]:
-        """Return the last closed HTF identities available to a decision.
-
-        Fifteen-minute rows between two HTF closes share one immutable regime
-        snapshot.  This avoids recomputing the daily/weekly telescope on every
-        microscope bar without changing V1's classifier semantics.
-        """
-        identities: list[object] = [all(self._regime_health.values())]
-        for timeframe, delta in (
-            ("4h", pd.Timedelta(hours=4)),
-            ("1d", pd.Timedelta(days=1)),
-        ):
-            frame = self._regime_frames[timeframe]
-            if frame.empty:
-                identities.append(None)
-                continue
-            timestamps = pd.to_datetime(frame["timestamp"], utc=True)
-            eligible = timestamps[timestamps + delta <= decision_at]
-            identities.append(int(eligible.iloc[-1].value) if not eligible.empty else None)
-        if self._weekly_vwap_artifacts.empty:
-            identities.append(None)
-        else:
-            close_times = pd.to_datetime(
-                self._weekly_vwap_artifacts["close_time"], utc=True, errors="coerce"
-            )
-            eligible = close_times[close_times <= decision_at]
-            identities.append(int(eligible.iloc[-1].value) if not eligible.empty else None)
-        return tuple(identities)
+        return self._context.identity(decision_at)
 
     def freeze_permission_snapshot(
         self,
@@ -166,87 +102,32 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
 
     def __init__(self, funding: pd.DataFrame | None = None) -> None:
         super().__init__(funding)
-        self._regime_frames: dict[str, pd.DataFrame] = {
-            "4h": pd.DataFrame(),
-            "1d": pd.DataFrame(),
-        }
-        self._regime_health = {"4h": False, "1d": False}
-        self._weekly_vwap_artifacts = pd.DataFrame()
-        self._weekly_vwap_symbol: str | None = None
-        # The live fold owns hysteresis across decision closes. Full prepare()
-        # replaces it with the machine advanced across that exact prefix;
-        # prepare_latest() then continues the same state instead of starting a
-        # stateless classifier on every 15m bar.
-        self._live_regime_machine = self._new_regime_machine()
+        self._context = ContinuationContext(self._new_regime_machine)
+
+    @property
+    def _regime_frames(self) -> dict[str, pd.DataFrame]:
+        """Compatibility view used by evidence binding and runtime readers."""
+        return self._context.frames
+
+    @property
+    def _regime_health(self) -> dict[str, bool]:
+        return self._context.health
 
     def bind_weekly_vwap_artifacts(self, artifacts: pd.DataFrame) -> None:
-        """Bind the cached Delta trade-lake weekly VWAP dataset.
-
-        This is intentionally separate from ``bind_canonical_context``:
-        official OHLC candles cannot satisfy the trade-lake VWAP contract.
-        The regime loop only reads this bounded cache and never scans trades.
-        """
-        frame = artifacts.copy()
-        if not frame.empty:
-            required = {
-                "exchange",
-                "symbol",
-                "timeframe",
-                "open_time",
-                "close_time",
-                "vwap",
-                "sum_base",
-                "sum_notional",
-                "n_trades",
-                "source",
-                "coverage_ok",
-            }
-            missing = required.difference(frame.columns)
-            if missing:
-                raise ValueError(f"weekly VWAP artifacts missing columns: {sorted(missing)}")
-            frame["open_time"] = pd.to_datetime(frame["open_time"], utc=True, errors="coerce")
-            frame["close_time"] = pd.to_datetime(
-                frame["close_time"], utc=True, errors="coerce"
-            )
-            frame = (
-                frame.sort_values("open_time")
-                .drop_duplicates("open_time", keep="last")
-                .tail(64)
-                .reset_index(drop=True)
-            )
-            symbols = set(frame["symbol"].astype(str))
-            if len(symbols) != 1:
-                raise ValueError("weekly VWAP cache must contain exactly one symbol")
-            self._weekly_vwap_symbol = symbols.pop()
-        else:
-            self._weekly_vwap_symbol = None
-        self._weekly_vwap_artifacts = frame
+        self._context.bind_weekly_vwap_artifacts(artifacts)
 
     def bind_canonical_context(self, timeframe: str, candles: pd.DataFrame) -> None:
-        if timeframe not in self.canonical_context_timeframes:
-            raise ValueError(f"unsupported market-regime context timeframe: {timeframe}")
-        frame = _context_frame(candles)
-        self._regime_frames[timeframe] = frame
-        self._regime_health[timeframe] = not frame.empty
+        self._context.bind_canonical_context(timeframe, candles)
         if timeframe == "4h":
-            super().bind_canonical_context(timeframe, frame)
+            super().bind_canonical_context(timeframe, self._context.frames[timeframe])
 
     def ingest_canonical_context(self, candle: Candle) -> None:
-        if candle.timeframe not in self.canonical_context_timeframes:
-            raise ValueError(
-                f"unsupported market-regime context timeframe: {candle.timeframe}"
-            )
-        self._regime_frames[candle.timeframe] = _append_candle(
-            self._regime_frames[candle.timeframe], candle
-        )
-        self._regime_health[candle.timeframe] = True
+        self._context.ingest_canonical_context(candle)
         if candle.timeframe == "4h":
             super().ingest_canonical_context(candle)
 
     def set_canonical_context_health(self, timeframe: str, healthy: bool) -> None:
-        if timeframe not in self.canonical_context_timeframes:
-            raise ValueError(f"unsupported market-regime context timeframe: {timeframe}")
-        self._regime_health[timeframe] = bool(healthy)
+        self._context.set_canonical_context_health(timeframe, healthy)
         if timeframe == "4h":
             super().set_canonical_context_health(timeframe, healthy)
 
@@ -256,16 +137,7 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
         *,
         machine: MarketRegimeMachine | None = None,
     ) -> MarketRegime:
-        regime_machine = machine or self._new_regime_machine()
-        return regime_machine.step(
-            self._regime_frames["1d"],
-            self._regime_frames["4h"],
-            as_of=decision_at,
-            weekly_vwap_artifacts=self._weekly_vwap_artifacts,
-            weekly_vwap_symbol=self._weekly_vwap_symbol,
-            data_healthy=all(self._regime_health.values()),
-            health_reason="canonical_regime_context_unhealthy",
-        )
+        return self._context.regime_at(decision_at, machine=machine)
 
     def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
         out = super().prepare(candles)
@@ -283,31 +155,9 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
                 )
                 last_identity = identity
             regimes.append(last_regime)
-        out["mreg_weekly"] = [item.weekly for item in regimes]
-        out["mreg_weekly_classifier"] = self.market_regime_config.weekly_classifier
-        out["mreg_daily"] = [item.daily for item in regimes]
-        out["mreg_h4"] = [item.h4 for item in regimes]
-        out["mreg_ema_state"] = [item.ema_state for item in regimes]
-        out["mreg_macd_impulse"] = [item.macd_impulse for item in regimes]
-        out["mreg_rsi_zone"] = [item.rsi_zone for item in regimes]
-        out["mreg_daily_ema21"] = [item.daily_ema21 for item in regimes]
-        out["mreg_daily_ema50"] = [item.daily_ema50 for item in regimes]
-        out["mreg_daily_ema200"] = [item.daily_ema200 for item in regimes]
-        out["mreg_daily_macd_hist"] = [item.daily_macd_hist for item in regimes]
-        out["mreg_h4_macd_hist"] = [item.h4_macd_hist for item in regimes]
-        out["mreg_daily_rsi"] = [item.daily_rsi for item in regimes]
-        out["mreg_daily_observations"] = [item.daily_observations for item in regimes]
-        out["mreg_ema200_ready"] = [float(item.ema200_ready) for item in regimes]
-        out["mreg_state"] = [item.state for item in regimes]
-        out["mreg_family"] = out["mreg_state"]  # schema-compatibility alias
-        out["mreg_reason"] = [item.reason for item in regimes]
-        out["mreg_exit_reason"] = [item.exit_reason for item in regimes]
-        out["mreg_asof_tf"] = [
-            item.asof_bar[0] if item.asof_bar is not None else None for item in regimes
-        ]
-        out["mreg_asof_close_time"] = [
-            item.asof_bar[1] if item.asof_bar is not None else None for item in regimes
-        ]
+        annotate_regimes(
+            out, regimes, weekly_classifier=self.market_regime_config.weekly_classifier,
+        )
         out["mreg_ready"] = [float(item.ready) for item in regimes]
         long_permission = pd.Series(
             [item.allows_scanner("htf", "long") for item in regimes],
@@ -328,7 +178,7 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
         out["rt_arm_ready"] = (
             out["rt_allow_long"].eq(1) | out["rt_allow_short"].eq(1)
         ).astype(float)
-        self._live_regime_machine = regime_machine
+        self._context.live_machine = regime_machine
         return out
 
     def prepare_latest(self, candles: pd.DataFrame) -> pd.DataFrame:
@@ -355,36 +205,14 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
         decision_at = pd.Timestamp(out.iloc[-1]["timestamp"]) + pd.Timedelta(minutes=15)
         regime = self._regime_at(
             decision_at,
-            machine=self._live_regime_machine,
+            machine=self._context.live_machine,
         )
         # Populate the diagnostic columns for the bounded display frame, but
         # permit decisions on the newest row only (see the zeroing below).
         regimes = [regime] * len(out)
-        out["mreg_weekly"] = [item.weekly for item in regimes]
-        out["mreg_weekly_classifier"] = self.market_regime_config.weekly_classifier
-        out["mreg_daily"] = [item.daily for item in regimes]
-        out["mreg_h4"] = [item.h4 for item in regimes]
-        out["mreg_ema_state"] = [item.ema_state for item in regimes]
-        out["mreg_macd_impulse"] = [item.macd_impulse for item in regimes]
-        out["mreg_rsi_zone"] = [item.rsi_zone for item in regimes]
-        out["mreg_daily_ema21"] = [item.daily_ema21 for item in regimes]
-        out["mreg_daily_ema50"] = [item.daily_ema50 for item in regimes]
-        out["mreg_daily_ema200"] = [item.daily_ema200 for item in regimes]
-        out["mreg_daily_macd_hist"] = [item.daily_macd_hist for item in regimes]
-        out["mreg_h4_macd_hist"] = [item.h4_macd_hist for item in regimes]
-        out["mreg_daily_rsi"] = [item.daily_rsi for item in regimes]
-        out["mreg_daily_observations"] = [item.daily_observations for item in regimes]
-        out["mreg_ema200_ready"] = [float(item.ema200_ready) for item in regimes]
-        out["mreg_state"] = [item.state for item in regimes]
-        out["mreg_family"] = out["mreg_state"]
-        out["mreg_reason"] = [item.reason for item in regimes]
-        out["mreg_exit_reason"] = [item.exit_reason for item in regimes]
-        out["mreg_asof_tf"] = [
-            item.asof_bar[0] if item.asof_bar is not None else None for item in regimes
-        ]
-        out["mreg_asof_close_time"] = [
-            item.asof_bar[1] if item.asof_bar is not None else None for item in regimes
-        ]
+        annotate_regimes(
+            out, regimes, weekly_classifier=self.market_regime_config.weekly_classifier,
+        )
         out["mreg_ready"] = 0.0
         out["mreg_allow_long"] = 0.0
         out["mreg_allow_short"] = 0.0

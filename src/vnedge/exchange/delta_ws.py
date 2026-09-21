@@ -162,6 +162,10 @@ class DeltaPublicWsClient:
         self.mark_price: dict[str, float] = {}
         self.books: dict[str, tuple[list, list]] = {}
         self.last_trade: dict[str, dict] = {}
+        # A public system snapshot is venue-health evidence, not a trade or
+        # quote watermark. Unknown/maintenance/fallback are entry-unhealthy.
+        self.system_status: str | None = None
+        self.system_status_at: datetime | None = None
         # candle state per (symbol, timeframe): forming candle + last closed
         self._forming_candles: dict[tuple[str, str], list] = {}
         self.last_closed_candle: dict[tuple[str, str], list] = {}
@@ -193,7 +197,11 @@ class DeltaPublicWsClient:
             "type": "subscribe",
             "payload": {
                 "channels": [
-                    {"name": name, "symbols": list(self.symbols)}
+                    (
+                        {"name": name}
+                        if name == "system_status"
+                        else {"name": name, "symbols": list(self.symbols)}
+                    )
                     for name in self.channels
                 ]
             },
@@ -280,6 +288,13 @@ class DeltaPublicWsClient:
             self._handle_funding(sym, msg)
         elif mtype in {"ticker", "v2/ticker"}:
             self._handle_ticker(sym, msg)
+        elif mtype == "system_status":
+            status = str(msg.get("status") or "").strip().lower()
+            self.system_status = status if status in {
+                "live", "maintenance", "api_fallback", "degraded_mode"
+            } else "unknown"
+            self.system_status_at = self._now()
+            self._touch_transport()
         elif isinstance(mtype, str) and mtype.startswith("candlestick_"):
             self._handle_candle(sym, mtype, msg)
         elif mtype == "heartbeat":

@@ -1,0 +1,84 @@
+{
+  "scanner": "DC20",
+  "source": "research/vela_family_v1/attempt_01/daily.parquet",
+  "can_trade": false,
+  "funding_included": false,
+  "missing_bars": 0,
+  "code_sha256": "da7746bb62a2b0c4edb710fc1678fe3bffdb34312e7670b7b407eaf37496241a",
+  "contract_sha256": "d0b8a50ccc7a678d67642c09edceb7ae5d674bbc386d77dc1a1045e0c73f7345",
+  "data_sha256": "7506e8f34660efa5253abf0358bfee3079541e71dc85f065f9fb539e58d56b31",
+  "results": [
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2025-01-01T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 8,
+        "win_rate": 0.625,
+        "pf": 1.328473682024409,
+        "net": 202.3466410219121,
+        "gross": 211.9539856686344,
+        "realized_dd": 335.9139947193282
+      },
+      "open_position": {
+        "side": -1,
+        "entry": 75607.0,
+        "stop": 82275.0,
+        "target": 69371.0,
+        "qty": 0.013226288571164046,
+        "entry_ts": "2026-09-16T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "full"
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2026-06-22T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 1,
+        "win_rate": 1.0,
+        "pf": null,
+        "net": 105.344105917997,
+        "gross": 106.6023807326751,
+        "realized_dd": 0.0
+      },
+      "open_position": {
+        "side": 1,
+        "entry": 78317.5,
+        "stop": 62245.0,
+        "target": 89457.5,
+        "qty": 0.012768538321575637,
+        "entry_ts": "2026-08-22T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "90d"
+    },
+    {
+      "scanner": "DC20",
+      "atr_kind": null,
+      "start": "2026-09-06T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 0,
+        "win_rate": null,
+        "pf": null,
+        "net": 0.0,
+        "gross": 0,
+        "realized_dd": 0.0
+      },
+      "open_position": {
+        "side": -1,
+        "entry": 75607.0,
+        "stop": 82275.0,
+        "target": 69371.0,
+        "qty": 0.013226288571164046,
+        "entry_ts": "2026-09-16T00:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "14d"
+    }
+  ]
+}

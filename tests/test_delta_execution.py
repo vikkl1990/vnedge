@@ -78,6 +78,19 @@ def test_dry_run_is_default_and_does_not_touch_a_client():
     assert oid.startswith("dryrun-")
 
 
+def test_client_order_id_over_venue_cap_is_rejected_without_truncation():
+    client = FakeDelta()
+    adapter = DeltaRestExecutionAdapter(
+        dry_run=False, api_key="k", api_secret="s", live_confirmed=True,
+        product_ids={"BTCUSD": 27}, contract_specs=_specs("BTCUSD"), client=client,
+    )
+    order = _order()
+    order.client_order_id = "x" * 33
+    with pytest.raises(AdapterRejection, match="1-32"):
+        _run(adapter.submit_order(order))
+    assert client.calls == []
+
+
 def test_real_orders_require_credentials():
     with pytest.raises(ValueError, match="credentials"):
         DeltaRestExecutionAdapter(dry_run=False)

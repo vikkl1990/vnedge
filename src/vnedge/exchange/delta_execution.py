@@ -157,6 +157,10 @@ class DeltaRestExecutionAdapter:
 
     # --- ExecutionAdapter protocol -------------------------------------------
     async def submit_order(self, order: ManagedOrder) -> str:
+        # Delta's venue field is capped at 32 characters. Never truncate the
+        # journaled key: that would destroy idempotent lookup on retry.
+        if not order.client_order_id or len(order.client_order_id) > 32:
+            raise AdapterRejection("Delta client_order_id must be 1-32 characters")
         intent = order.intent
         if (
             not intent.reduce_only

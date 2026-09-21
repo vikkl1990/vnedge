@@ -34,7 +34,8 @@ flowchart TD
     Gateway -->|deny| Eval
     Gateway -->|allow| WAL[Order Manager: dedupe, stable key and durable intent journal]
     WAL --> Paper[Mode-authorized paper broker]
-    LiveStartup[live_trader_main preflight before client construction] -->|Delta private stream missing| LiveRefuse[Delta live startup refused]
+    LiveStartup[live_trader_main preflight before client construction] -->|Delta private stream missing| LiveRefuse[Process-level Delta startup refuse: no client]
+    LiveStartup -->|registered scanner on exchange OHLC path| FeedRefuse[Process-level canonical feed refuse: no client]
     LiveStartup -. guarded future live route .-> Evidence
     Eval --> Queue[Read-only Signal Queue and Desk]
     Arm --> Queue
@@ -111,12 +112,19 @@ venue fills.
 `live_trader_main` is a separate, guarded CLI, not a default Compose service.
 It refuses startup unless the live mode, enable flag, exact confirmation
 phrase, pre-live checklist, capital-approved strategy, and trade credentials
-all pass. The Delta adapter exists, but its native private order/fill stream
-is still missing; Delta live startup is explicitly refused. The live session
-also has a separate exchange-OHLC feed path, while registered production
-scanners require canonical closed-bar evidence. Until that parity and private
-truth are implemented and verified, "same fire, different sink" is an
-architectural target, not a claim about a working Delta live route.
+all pass. Delta then refuses **before** product bootstrap, journal or venue
+client construction. Delta publishes private channels, and VNEDGE now has a
+read-only key-auth evidence collector with explicit sequence-gap failure,
+but it is not yet a reconciled order/fill/position execution stream. The fast
+fill channel omits commission, and reconnect requires independent baseline
+reconciliation. An injected test stream cannot override the production refusal.
+Startup refusal is logged at process level, not represented as a scanner ARM
+or decision-journal event. A registered scanner also refuses before any
+client construction if it would use this entrypoint's exchange-OHLC warmup
+and feed. That path is still not the canonical hashed trade-lake bar path.
+Until canonical feed parity and private truth are implemented and verified,
+"same fire, different sink" is an architectural target, not a claim about a
+working Delta live route. The capital allowlist remains empty.
 
 Research, replay, shadow, paper, and live evidence must remain partitioned by
 `strategy_id`, symbol, entry clock, and cost profile. A changed claim, clock,

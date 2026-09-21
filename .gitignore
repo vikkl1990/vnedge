@@ -40,6 +40,7 @@ KILL
 
 # Claude Code local session settings
 .claude/settings.local.json
+.codex-pr-work/
 
 # ML model registry artifacts
 /models/

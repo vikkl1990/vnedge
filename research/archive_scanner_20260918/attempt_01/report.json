@@ -1,0 +1,2353 @@
+{
+  "can_trade": false,
+  "can_promote": false,
+  "performance_eligible": false,
+  "contract_sha256": "c5d003048bee12bb4c1972f0cd908079ca07515d0d3d4c878d8813df33c1cc38",
+  "code_sha256": "e63285d1e8a840cc6b05fcca6352fe6ba7373c3d819009ba16529ed3d9ddcb0c",
+  "source": "delta_official_trade_archive_unverified",
+  "funding_included": false,
+  "timestamp_timezone": "UTC_ASSUMED",
+  "inputs": [
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-BTCUSD-2026-01.csv.zip",
+      "sha256": "23ae9c44a9a32b888c08f7c5387532cdfb06f0ba32242ca5b6a3b08701d86d56",
+      "rows": 7205234,
+      "first_minute": "2026-01-01T00:00:00+00:00",
+      "last_minute": "2026-01-31T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-BTCUSD-2026-02.csv.zip",
+      "sha256": "73ef5d4f8d151a41618b162f6319bd6deab832c10b30d0d55d79799c2f66f925",
+      "rows": 11182384,
+      "first_minute": "2026-02-01T00:00:00+00:00",
+      "last_minute": "2026-02-28T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-BTCUSD-2026-03.csv (1).zip",
+      "sha256": "86030a7542a9c22c4e5a0afc0715a0c5f0fb18f65108c6c688e6782493d8427d",
+      "rows": 10901866,
+      "first_minute": "2026-03-01T00:00:00+00:00",
+      "last_minute": "2026-03-31T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-BTCUSD-2026-04.csv.zip",
+      "sha256": "d918cd9d70d26cca7c60f95a232579fc7440649974f36f2a4fb7265c59e70d46",
+      "rows": 8441215,
+      "first_minute": "2026-04-01T00:00:00+00:00",
+      "last_minute": "2026-04-30T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-BTCUSD-2026-05.csv.zip",
+      "sha256": "06cb5b8e0cfa9db7f9e79d892387c159c429b474d4bd29e31679065d91c2cb80",
+      "rows": 6753417,
+      "first_minute": "2026-05-01T00:00:00+00:00",
+      "last_minute": "2026-05-31T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-BTCUSD-2026-06.csv.zip",
+      "sha256": "a268c3c3286292fddbeeba361878bab8d2e5e087bf5edbc545a8b07a99df6753",
+      "rows": 9479187,
+      "first_minute": "2026-06-01T00:00:00+00:00",
+      "last_minute": "2026-06-30T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-BTCUSD-2026-07.csv.zip",
+      "sha256": "83ba660a6bec202fe5d8024af2d7163024e4f6b7b254fe70dd2ed1b34c2d30b1",
+      "rows": 6422268,
+      "first_minute": "2026-07-01T00:00:00+00:00",
+      "last_minute": "2026-07-26T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-BTCUSD-2026-08.csv.zip",
+      "sha256": "e4a49421bdc10c3fd8ad0974ec00718f3313abf58675d83575abf7ea92f5e138",
+      "rows": 7440458,
+      "first_minute": "2026-08-01T00:00:00+00:00",
+      "last_minute": "2026-08-31T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-BTCUSD-2026-09.csv.zip",
+      "sha256": "723c5354002238a424c2943e1ce73e272bc7bad049ffc09b0478f2ffe58bcb51",
+      "rows": 314107,
+      "first_minute": "2026-09-01T00:00:00+00:00",
+      "last_minute": "2026-09-01T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-ETHUSD-2026-01.csv.zip",
+      "sha256": "87b4786adc3618d4f4c93d1d187bc4f85e1872c09c9637522dc8f2481b802d40",
+      "rows": 7097521,
+      "first_minute": "2026-01-01T00:00:00+00:00",
+      "last_minute": "2026-01-31T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-ETHUSD-2026-02.csv.zip",
+      "sha256": "a323bf920b67257cfbcd5e4ece3791adc473ed385cbb3104e45cb29736d339f4",
+      "rows": 9662061,
+      "first_minute": "2026-02-01T00:00:00+00:00",
+      "last_minute": "2026-02-28T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-ETHUSD-2026-04.csv.zip",
+      "sha256": "b9b9b8162390c2d94b77ccfc58712358bebebbda015f871aff33d147a1c0a307",
+      "rows": 6524494,
+      "first_minute": "2026-04-01T00:00:00+00:00",
+      "last_minute": "2026-04-30T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-ETHUSD-2026-05.csv.zip",
+      "sha256": "1613d94f42cb57d67bbc00095c14a7949ee37c186388c507983436191b528a5d",
+      "rows": 4946456,
+      "first_minute": "2026-05-01T00:00:00+00:00",
+      "last_minute": "2026-05-31T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-ETHUSD-2026-06.csv.zip",
+      "sha256": "567f46fc6c3f68d270771f57c2a70b8adee90d82a5f15c3bcbb30e58bdf0aae4",
+      "rows": 6373103,
+      "first_minute": "2026-06-01T00:00:00+00:00",
+      "last_minute": "2026-06-30T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-ETHUSD-2026-07.csv.zip",
+      "sha256": "3a7dd40ba275573678e673c87271d69ab9f51db861d6bddfc63aa9924f85a92f",
+      "rows": 4798776,
+      "first_minute": "2026-07-01T00:00:00+00:00",
+      "last_minute": "2026-07-26T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-ETHUSD-2026-08.csv.zip",
+      "sha256": "af792f42c4d9b1920af49830529db843ad49a47439764176fa365ed7928a720f",
+      "rows": 5369573,
+      "first_minute": "2026-08-01T00:00:00+00:00",
+      "last_minute": "2026-08-31T23:59:00+00:00"
+    },
+    {
+      "path": "/Users/scorpion/Downloads/futures-trades-monthly-ETHUSD-2026-09.csv.zip",
+      "sha256": "3afccb3000a9f923c3959493df620cfe1a794f4d14f13e8d5ef97d4deca4af7d",
+      "rows": 219287,
+      "first_minute": "2026-09-01T00:00:00+00:00",
+      "last_minute": "2026-09-01T23:59:00+00:00"
+    }
+  ],
+  "results": [
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "baseline",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 3439,
+      "filtered": 0,
+      "overlap": 850,
+      "censored": 1,
+      "n": 2588,
+      "mean_gross_bps": -0.5094056185928618,
+      "11.8": {
+        "mean_net_bps": -12.309405618592862,
+        "win_fraction": 0.21136012364760431,
+        "profit_factor": 0.229751692400915,
+        "additive_drawdown_bps": 31864.13442735191
+      },
+      "17.8": {
+        "mean_net_bps": -18.309405618592862,
+        "win_fraction": 0.13987635239567234,
+        "profit_factor": 0.12599126763966698,
+        "additive_drawdown_bps": 47386.134427351826
+      },
+      "23.8": {
+        "mean_net_bps": -24.309405618592862,
+        "win_fraction": 0.09505409582689335,
+        "profit_factor": 0.07403549592376717,
+        "additive_drawdown_bps": 62912.7417409183
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -19.371747329229745,
+        -17.246183325609213
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "baseline",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 1225,
+      "filtered": 0,
+      "overlap": 292,
+      "censored": 1,
+      "n": 932,
+      "mean_gross_bps": -1.0925884060761049,
+      "11.8": {
+        "mean_net_bps": -12.892588406076106,
+        "win_fraction": 0.1963519313304721,
+        "profit_factor": 0.2265489461690546,
+        "additive_drawdown_bps": 12049.76445408777
+      },
+      "17.8": {
+        "mean_net_bps": -18.892588406076104,
+        "win_fraction": 0.1276824034334764,
+        "profit_factor": 0.12958887140401798,
+        "additive_drawdown_bps": 17607.892394462942
+      },
+      "23.8": {
+        "mean_net_bps": -24.892588406076104,
+        "win_fraction": 0.0944206008583691,
+        "profit_factor": 0.07965568736651425,
+        "additive_drawdown_bps": 23199.892394462917
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -20.367976069014222,
+        -17.363955438146906
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "baseline",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 596,
+      "filtered": 0,
+      "overlap": 121,
+      "censored": 0,
+      "n": 475,
+      "mean_gross_bps": 1.1092668564985722,
+      "11.8": {
+        "mean_net_bps": -10.690733143501427,
+        "win_fraction": 0.18526315789473685,
+        "profit_factor": 0.19901097597251358,
+        "additive_drawdown_bps": 5107.958929616365
+      },
+      "17.8": {
+        "mean_net_bps": -16.69073314350143,
+        "win_fraction": 0.11789473684210526,
+        "profit_factor": 0.09434398597101334,
+        "additive_drawdown_bps": 7932.425677516799
+      },
+      "23.8": {
+        "mean_net_bps": -22.69073314350143,
+        "win_fraction": 0.07368421052631578,
+        "profit_factor": 0.04924438080917166,
+        "additive_drawdown_bps": 10778.098243163184
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -18.106710838445565,
+        -15.200781175820824
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "baseline",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 16,
+      "filtered": 0,
+      "overlap": 4,
+      "censored": 0,
+      "n": 12,
+      "mean_gross_bps": 7.63418722957913,
+      "11.8": {
+        "mean_net_bps": -4.16581277042087,
+        "win_fraction": 0.4166666666666667,
+        "profit_factor": 0.5824458890203454,
+        "additive_drawdown_bps": 93.15612253258927
+      },
+      "17.8": {
+        "mean_net_bps": -10.165812770420871,
+        "win_fraction": 0.25,
+        "profit_factor": 0.25639939654112925,
+        "additive_drawdown_bps": 129.3155587317559
+      },
+      "23.8": {
+        "mean_net_bps": -16.165812770420875,
+        "win_fraction": 0.25,
+        "profit_factor": 0.11035417743890522,
+        "additive_drawdown_bps": 193.98975324505045
+      }
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "regime",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 3439,
+      "filtered": 3200,
+      "overlap": 21,
+      "censored": 0,
+      "n": 218,
+      "mean_gross_bps": -0.18482929853005084,
+      "11.8": {
+        "mean_net_bps": -11.98482929853005,
+        "win_fraction": 0.22018348623853212,
+        "profit_factor": 0.23724936852859782,
+        "additive_drawdown_bps": 2620.0854735131015
+      },
+      "17.8": {
+        "mean_net_bps": -17.98482929853005,
+        "win_fraction": 0.1834862385321101,
+        "profit_factor": 0.12357112731117792,
+        "additive_drawdown_bps": 3922.0854735131006
+      },
+      "23.8": {
+        "mean_net_bps": -23.98482929853005,
+        "win_fraction": 0.12385321100917432,
+        "profit_factor": 0.06401372956678536,
+        "additive_drawdown_bps": 5228.692787079554
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -21.3796017817026,
+        -15.01729173934105
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "regime",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 1225,
+      "filtered": 1142,
+      "overlap": 6,
+      "censored": 0,
+      "n": 77,
+      "mean_gross_bps": -4.087837725464098,
+      "11.8": {
+        "mean_net_bps": -15.8878377254641,
+        "win_fraction": 0.15584415584415584,
+        "profit_factor": 0.1889002172560427,
+        "additive_drawdown_bps": 1237.275982476985
+      },
+      "17.8": {
+        "mean_net_bps": -21.8878377254641,
+        "win_fraction": 0.14285714285714285,
+        "profit_factor": 0.11325405751542202,
+        "additive_drawdown_bps": 1685.3635048607352
+      },
+      "23.8": {
+        "mean_net_bps": -27.8878377254641,
+        "win_fraction": 0.07792207792207792,
+        "profit_factor": 0.07137776649696174,
+        "additive_drawdown_bps": 2147.3635048607352
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -28.25571277535402,
+        -16.355636411475054
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "regime",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 596,
+      "filtered": 548,
+      "overlap": 2,
+      "censored": 0,
+      "n": 46,
+      "mean_gross_bps": 1.3344304640158904,
+      "11.8": {
+        "mean_net_bps": -10.46556953598411,
+        "win_fraction": 0.13043478260869565,
+        "profit_factor": 0.20233872000675804,
+        "additive_drawdown_bps": 481.41619865526894
+      },
+      "17.8": {
+        "mean_net_bps": -16.46556953598411,
+        "win_fraction": 0.10869565217391304,
+        "profit_factor": 0.10534309290608623,
+        "additive_drawdown_bps": 757.4161986552692
+      },
+      "23.8": {
+        "mean_net_bps": -22.46556953598411,
+        "win_fraction": 0.06521739130434782,
+        "profit_factor": 0.0583107262742986,
+        "additive_drawdown_bps": 1033.416198655269
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -20.154023961043645,
+        -11.96574307368516
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "regime",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 16,
+      "filtered": 15,
+      "overlap": 0,
+      "censored": 0,
+      "n": 1,
+      "mean_gross_bps": 36.58246484804506,
+      "11.8": {
+        "mean_net_bps": 24.782464848045063,
+        "win_fraction": 1.0,
+        "profit_factor": null,
+        "additive_drawdown_bps": 0.0
+      },
+      "17.8": {
+        "mean_net_bps": 18.782464848045063,
+        "win_fraction": 1.0,
+        "profit_factor": null,
+        "additive_drawdown_bps": 0.0
+      },
+      "23.8": {
+        "mean_net_bps": 12.782464848045063,
+        "win_fraction": 1.0,
+        "profit_factor": null,
+        "additive_drawdown_bps": 0.0
+      }
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "session",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 3439,
+      "filtered": 3439,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "session",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 1225,
+      "filtered": 1225,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "session",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 596,
+      "filtered": 596,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "session",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 16,
+      "filtered": 16,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "both",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 3439,
+      "filtered": 3439,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "both",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 1225,
+      "filtered": 1225,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "both",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 596,
+      "filtered": 596,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "pullback",
+      "variant": "both",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 16,
+      "filtered": 16,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "baseline",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 2058,
+      "filtered": 0,
+      "overlap": 288,
+      "censored": 1,
+      "n": 1769,
+      "mean_gross_bps": 0.6606647818512914,
+      "11.8": {
+        "mean_net_bps": -11.139335218148707,
+        "win_fraction": 0.26116449971735445,
+        "profit_factor": 0.28236595165914763,
+        "additive_drawdown_bps": 19705.48400090507
+      },
+      "17.8": {
+        "mean_net_bps": -17.13933521814871,
+        "win_fraction": 0.17693612210288298,
+        "profit_factor": 0.1519705945811054,
+        "additive_drawdown_bps": 30319.484000905082
+      },
+      "23.8": {
+        "mean_net_bps": -23.13933521814871,
+        "win_fraction": 0.11531938948558508,
+        "profit_factor": 0.08676706767500589,
+        "additive_drawdown_bps": 40933.484000905046
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -18.253941049288553,
+        -16.00521821845962
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "baseline",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 762,
+      "filtered": 0,
+      "overlap": 116,
+      "censored": 0,
+      "n": 646,
+      "mean_gross_bps": -2.0052882032179937,
+      "11.8": {
+        "mean_net_bps": -13.805288203217994,
+        "win_fraction": 0.2043343653250774,
+        "profit_factor": 0.18861035725388592,
+        "additive_drawdown_bps": 8918.21617927883
+      },
+      "17.8": {
+        "mean_net_bps": -19.805288203217994,
+        "win_fraction": 0.12538699690402477,
+        "profit_factor": 0.10160459008502584,
+        "additive_drawdown_bps": 12794.216179278816
+      },
+      "23.8": {
+        "mean_net_bps": -25.805288203217994,
+        "win_fraction": 0.08204334365325078,
+        "profit_factor": 0.059574056825289844,
+        "additive_drawdown_bps": 16670.21617927881
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -21.81472188642926,
+        -17.67996297331048
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "baseline",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 421,
+      "filtered": 0,
+      "overlap": 62,
+      "censored": 1,
+      "n": 358,
+      "mean_gross_bps": 0.16814259122437658,
+      "11.8": {
+        "mean_net_bps": -11.631857408775625,
+        "win_fraction": 0.18435754189944134,
+        "profit_factor": 0.16161626575984997,
+        "additive_drawdown_bps": 4164.204952341677
+      },
+      "17.8": {
+        "mean_net_bps": -17.631857408775623,
+        "win_fraction": 0.10893854748603352,
+        "profit_factor": 0.073219282227519,
+        "additive_drawdown_bps": 6312.204952341675
+      },
+      "23.8": {
+        "mean_net_bps": -23.631857408775623,
+        "win_fraction": 0.07262569832402235,
+        "profit_factor": 0.037098177266238354,
+        "additive_drawdown_bps": 8460.20495234167
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -20.110731804601542,
+        -15.427137576341709
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "baseline",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 18,
+      "filtered": 0,
+      "overlap": 3,
+      "censored": 0,
+      "n": 15,
+      "mean_gross_bps": -0.9286553220477051,
+      "11.8": {
+        "mean_net_bps": -12.728655322047706,
+        "win_fraction": 0.26666666666666666,
+        "profit_factor": 0.34047638191401064,
+        "additive_drawdown_bps": 269.3575447116897
+      },
+      "17.8": {
+        "mean_net_bps": -18.7286553220477,
+        "win_fraction": 0.2,
+        "profit_factor": 0.21931938418778113,
+        "additive_drawdown_bps": 341.3575447116896
+      },
+      "23.8": {
+        "mean_net_bps": -24.728655322047704,
+        "win_fraction": 0.13333333333333333,
+        "profit_factor": 0.15049018311038806,
+        "additive_drawdown_bps": 413.3575447116896
+      }
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "regime",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 2058,
+      "filtered": 765,
+      "overlap": 149,
+      "censored": 0,
+      "n": 1144,
+      "mean_gross_bps": 0.09362263900157196,
+      "11.8": {
+        "mean_net_bps": -11.706377360998427,
+        "win_fraction": 0.23339160839160839,
+        "profit_factor": 0.24569999693243325,
+        "additive_drawdown_bps": 13392.095700982207
+      },
+      "17.8": {
+        "mean_net_bps": -17.706377360998427,
+        "win_fraction": 0.1555944055944056,
+        "profit_factor": 0.13020079531839143,
+        "additive_drawdown_bps": 20256.095700982198
+      },
+      "23.8": {
+        "mean_net_bps": -23.706377360998427,
+        "win_fraction": 0.0979020979020979,
+        "profit_factor": 0.0738848758561409,
+        "additive_drawdown_bps": 27120.095700982205
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -19.013066323812602,
+        -16.320134751054
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "regime",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 762,
+      "filtered": 291,
+      "overlap": 50,
+      "censored": 0,
+      "n": 421,
+      "mean_gross_bps": -3.1313989307564425,
+      "11.8": {
+        "mean_net_bps": -14.931398930756442,
+        "win_fraction": 0.171021377672209,
+        "profit_factor": 0.14594879959017792,
+        "additive_drawdown_bps": 6286.118949848469
+      },
+      "17.8": {
+        "mean_net_bps": -20.931398930756444,
+        "win_fraction": 0.09501187648456057,
+        "profit_factor": 0.07770636898900428,
+        "additive_drawdown_bps": 8812.118949848464
+      },
+      "23.8": {
+        "mean_net_bps": -26.931398930756444,
+        "win_fraction": 0.05938242280285035,
+        "profit_factor": 0.04601938079302751,
+        "additive_drawdown_bps": 11338.118949848465
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -23.149893703721453,
+        -18.511374434339704
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "regime",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 421,
+      "filtered": 167,
+      "overlap": 29,
+      "censored": 0,
+      "n": 225,
+      "mean_gross_bps": 0.2866758903199479,
+      "11.8": {
+        "mean_net_bps": -11.513324109680052,
+        "win_fraction": 0.1688888888888889,
+        "profit_factor": 0.16516408841550742,
+        "additive_drawdown_bps": 2590.4979246780126
+      },
+      "17.8": {
+        "mean_net_bps": -17.513324109680052,
+        "win_fraction": 0.10222222222222223,
+        "profit_factor": 0.0789680031908482,
+        "additive_drawdown_bps": 3940.497924678013
+      },
+      "23.8": {
+        "mean_net_bps": -23.51332410968005,
+        "win_fraction": 0.07555555555555556,
+        "profit_factor": 0.04126911799573175,
+        "additive_drawdown_bps": 5290.497924678015
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -19.87728609408546,
+        -15.305884349573466
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "regime",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 18,
+      "filtered": 8,
+      "overlap": 2,
+      "censored": 0,
+      "n": 8,
+      "mean_gross_bps": -2.7274527443507672,
+      "11.8": {
+        "mean_net_bps": -14.527452744350766,
+        "win_fraction": 0.25,
+        "profit_factor": 0.2354938861955301,
+        "additive_drawdown_bps": 139.09279398682608
+      },
+      "17.8": {
+        "mean_net_bps": -20.527452744350768,
+        "win_fraction": 0.125,
+        "profit_factor": 0.14635713349710183,
+        "additive_drawdown_bps": 175.09279398682608
+      },
+      "23.8": {
+        "mean_net_bps": -26.527452744350768,
+        "win_fraction": 0.125,
+        "profit_factor": 0.09452995473501699,
+        "additive_drawdown_bps": 212.21962195480614
+      }
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "session",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 2058,
+      "filtered": 2058,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "session",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 762,
+      "filtered": 762,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "session",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 421,
+      "filtered": 421,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "session",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 18,
+      "filtered": 18,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "both",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 2058,
+      "filtered": 2058,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "both",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 762,
+      "filtered": 762,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "both",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 421,
+      "filtered": 421,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "reclaim",
+      "variant": "both",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 18,
+      "filtered": 18,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "baseline",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 1068,
+      "filtered": 0,
+      "overlap": 166,
+      "censored": 1,
+      "n": 901,
+      "mean_gross_bps": 0.020441553065974845,
+      "11.8": {
+        "mean_net_bps": -11.779558446934026,
+        "win_fraction": 0.22197558268590456,
+        "profit_factor": 0.30179606177999146,
+        "additive_drawdown_bps": 10613.382160687554
+      },
+      "17.8": {
+        "mean_net_bps": -17.779558446934026,
+        "win_fraction": 0.16648168701442842,
+        "profit_factor": 0.1813527389777058,
+        "additive_drawdown_bps": 16019.382160687543
+      },
+      "23.8": {
+        "mean_net_bps": -23.779558446934026,
+        "win_fraction": 0.12319644839067703,
+        "profit_factor": 0.11403452588854218,
+        "additive_drawdown_bps": 21425.382160687535
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -19.288315961917586,
+        -16.16743101823733
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "baseline",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 391,
+      "filtered": 0,
+      "overlap": 67,
+      "censored": 0,
+      "n": 324,
+      "mean_gross_bps": -0.42043284280080456,
+      "11.8": {
+        "mean_net_bps": -12.220432842800806,
+        "win_fraction": 0.20987654320987653,
+        "profit_factor": 0.24868100416759137,
+        "additive_drawdown_bps": 3998.962821447038
+      },
+      "17.8": {
+        "mean_net_bps": -18.220432842800804,
+        "win_fraction": 0.14814814814814814,
+        "profit_factor": 0.14077624052194831,
+        "additive_drawdown_bps": 5930.962821447035
+      },
+      "23.8": {
+        "mean_net_bps": -24.220432842800804,
+        "win_fraction": 0.11419753086419752,
+        "profit_factor": 0.08295417146354214,
+        "additive_drawdown_bps": 7862.962821447035
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -20.274950053232477,
+        -16.100296913919145
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "baseline",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 189,
+      "filtered": 0,
+      "overlap": 28,
+      "censored": 0,
+      "n": 161,
+      "mean_gross_bps": -0.9806197909095039,
+      "11.8": {
+        "mean_net_bps": -12.780619790909507,
+        "win_fraction": 0.20496894409937888,
+        "profit_factor": 0.1967636875926962,
+        "additive_drawdown_bps": 2058.705283493434
+      },
+      "17.8": {
+        "mean_net_bps": -18.780619790909505,
+        "win_fraction": 0.11180124223602485,
+        "profit_factor": 0.10480659285784971,
+        "additive_drawdown_bps": 3023.6797863364286
+      },
+      "23.8": {
+        "mean_net_bps": -24.7806197909095,
+        "win_fraction": 0.062111801242236024,
+        "profit_factor": 0.06279265006057665,
+        "additive_drawdown_bps": 3989.679786336428
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -22.06249270133807,
+        -15.535961424614452
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "baseline",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 9,
+      "filtered": 0,
+      "overlap": 2,
+      "censored": 0,
+      "n": 7,
+      "mean_gross_bps": 1.1819810099232357,
+      "11.8": {
+        "mean_net_bps": -10.618018990076767,
+        "win_fraction": 0.2857142857142857,
+        "profit_factor": 0.1921690405508978,
+        "additive_drawdown_bps": 81.13847912017661
+      },
+      "17.8": {
+        "mean_net_bps": -16.618018990076767,
+        "win_fraction": 0.2857142857142857,
+        "profit_factor": 0.04656210129966847,
+        "additive_drawdown_bps": 117.13847912017661
+      },
+      "23.8": {
+        "mean_net_bps": -22.618018990076767,
+        "win_fraction": 0.0,
+        "profit_factor": 0.0,
+        "additive_drawdown_bps": 158.32613293053737
+      }
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "regime",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 1068,
+      "filtered": 869,
+      "overlap": 9,
+      "censored": 0,
+      "n": 190,
+      "mean_gross_bps": -0.5722709211238147,
+      "11.8": {
+        "mean_net_bps": -12.372270921123814,
+        "win_fraction": 0.21578947368421053,
+        "profit_factor": 0.377819884876464,
+        "additive_drawdown_bps": 2350.731475013525
+      },
+      "17.8": {
+        "mean_net_bps": -18.372270921123814,
+        "win_fraction": 0.20526315789473684,
+        "profit_factor": 0.25377211038724057,
+        "additive_drawdown_bps": 3490.7314750135247
+      },
+      "23.8": {
+        "mean_net_bps": -24.372270921123814,
+        "win_fraction": 0.14210526315789473,
+        "profit_factor": 0.17603392341201082,
+        "additive_drawdown_bps": 4630.731475013527
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -22.684892579316713,
+        -13.761243861231254
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "regime",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 391,
+      "filtered": 322,
+      "overlap": 5,
+      "censored": 0,
+      "n": 64,
+      "mean_gross_bps": -2.8614462369674394,
+      "11.8": {
+        "mean_net_bps": -14.661446236967441,
+        "win_fraction": 0.1875,
+        "profit_factor": 0.17638894832493773,
+        "additive_drawdown_bps": 938.3325591659161
+      },
+      "17.8": {
+        "mean_net_bps": -20.66144623696744,
+        "win_fraction": 0.140625,
+        "profit_factor": 0.09358780328189151,
+        "additive_drawdown_bps": 1322.3325591659159
+      },
+      "23.8": {
+        "mean_net_bps": -26.661446236967443,
+        "win_fraction": 0.125,
+        "profit_factor": 0.04873650734452749,
+        "additive_drawdown_bps": 1706.332559165916
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -26.901447075703693,
+        -14.618784779586262
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "regime",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 189,
+      "filtered": 162,
+      "overlap": 1,
+      "censored": 0,
+      "n": 26,
+      "mean_gross_bps": -6.253020297062488,
+      "11.8": {
+        "mean_net_bps": -18.053020297062485,
+        "win_fraction": 0.15384615384615385,
+        "profit_factor": 0.26098485509136005,
+        "additive_drawdown_bps": 516.9119022275003
+      },
+      "17.8": {
+        "mean_net_bps": -24.053020297062492,
+        "win_fraction": 0.11538461538461539,
+        "profit_factor": 0.18560412467479373,
+        "additive_drawdown_bps": 660.9119022275003
+      },
+      "23.8": {
+        "mean_net_bps": -30.053020297062492,
+        "win_fraction": 0.11538461538461539,
+        "profit_factor": 0.1374606909824102,
+        "additive_drawdown_bps": 804.9119022275003
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -35.48511528958589,
+        -11.544682103166307
+      ]
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "regime",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 9,
+      "filtered": 8,
+      "overlap": 0,
+      "censored": 0,
+      "n": 1,
+      "mean_gross_bps": 14.169233786032187,
+      "11.8": {
+        "mean_net_bps": 2.3692337860321864,
+        "win_fraction": 1.0,
+        "profit_factor": null,
+        "additive_drawdown_bps": 0.0
+      },
+      "17.8": {
+        "mean_net_bps": -3.6307662139678136,
+        "win_fraction": 0.0,
+        "profit_factor": 0.0,
+        "additive_drawdown_bps": 3.6307662139678136
+      },
+      "23.8": {
+        "mean_net_bps": -9.630766213967814,
+        "win_fraction": 0.0,
+        "profit_factor": 0.0,
+        "additive_drawdown_bps": 9.630766213967814
+      }
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "session",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 1068,
+      "filtered": 1068,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "session",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 391,
+      "filtered": 391,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "session",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 189,
+      "filtered": 189,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "session",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 9,
+      "filtered": 9,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "both",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 1068,
+      "filtered": 1068,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "both",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 391,
+      "filtered": 391,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "both",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 189,
+      "filtered": 189,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "BTCUSD",
+      "family": "compression",
+      "variant": "both",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 9,
+      "filtered": 9,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "baseline",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 2767,
+      "filtered": 0,
+      "overlap": 642,
+      "censored": 4,
+      "n": 2121,
+      "mean_gross_bps": -0.13694770331166367,
+      "11.8": {
+        "mean_net_bps": -11.936947703311663,
+        "win_fraction": 0.2362093352192362,
+        "profit_factor": 0.3245920673512069,
+        "additive_drawdown_bps": 25318.266078724027
+      },
+      "17.8": {
+        "mean_net_bps": -17.936947703311663,
+        "win_fraction": 0.1702027345591702,
+        "profit_factor": 0.20127972625045484,
+        "additive_drawdown_bps": 38044.26607872401
+      },
+      "23.8": {
+        "mean_net_bps": -23.936947703311663,
+        "win_fraction": 0.12164073550212164,
+        "profit_factor": 0.13241373587267477,
+        "additive_drawdown_bps": 50770.2660787241
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -19.15607079074932,
+        -16.605518148505997
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "baseline",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 1331,
+      "filtered": 0,
+      "overlap": 319,
+      "censored": 2,
+      "n": 1010,
+      "mean_gross_bps": 1.3750642897393393,
+      "11.8": {
+        "mean_net_bps": -10.42493571026066,
+        "win_fraction": 0.2623762376237624,
+        "profit_factor": 0.359751241628242,
+        "additive_drawdown_bps": 10553.281193973104
+      },
+      "17.8": {
+        "mean_net_bps": -16.424935710260662,
+        "win_fraction": 0.18712871287128713,
+        "profit_factor": 0.21497388527361264,
+        "additive_drawdown_bps": 16599.231909730246
+      },
+      "23.8": {
+        "mean_net_bps": -22.424935710260662,
+        "win_fraction": 0.13762376237623763,
+        "profit_factor": 0.13634172349545493,
+        "additive_drawdown_bps": 22653.23190973024
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -18.318942990204615,
+        -14.425009769821983
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "baseline",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 640,
+      "filtered": 0,
+      "overlap": 158,
+      "censored": 1,
+      "n": 481,
+      "mean_gross_bps": -1.8596862815964428,
+      "11.8": {
+        "mean_net_bps": -13.659686281596445,
+        "win_fraction": 0.19334719334719336,
+        "profit_factor": 0.17102173755223524,
+        "additive_drawdown_bps": 6572.45610284259
+      },
+      "17.8": {
+        "mean_net_bps": -19.659686281596446,
+        "win_fraction": 0.1288981288981289,
+        "profit_factor": 0.0877554205345595,
+        "additive_drawdown_bps": 9456.309101447885
+      },
+      "23.8": {
+        "mean_net_bps": -25.659686281596443,
+        "win_fraction": 0.08523908523908524,
+        "profit_factor": 0.04682708583540879,
+        "additive_drawdown_bps": 12342.309101447894
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -21.338103839376547,
+        -17.951301632678298
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "baseline",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 29,
+      "filtered": 0,
+      "overlap": 8,
+      "censored": 0,
+      "n": 21,
+      "mean_gross_bps": 5.601115897797972,
+      "11.8": {
+        "mean_net_bps": -6.198884102202029,
+        "win_fraction": 0.38095238095238093,
+        "profit_factor": 0.3997221583070509,
+        "additive_drawdown_bps": 134.0751183411488
+      },
+      "17.8": {
+        "mean_net_bps": -12.19888410220203,
+        "win_fraction": 0.14285714285714285,
+        "profit_factor": 0.1710819538301987,
+        "additive_drawdown_bps": 256.17656614624264
+      },
+      "23.8": {
+        "mean_net_bps": -18.198884102202026,
+        "win_fraction": 0.09523809523809523,
+        "profit_factor": 0.09275380250828812,
+        "additive_drawdown_bps": 382.17656614624264
+      }
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "regime",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 2767,
+      "filtered": 2572,
+      "overlap": 8,
+      "censored": 1,
+      "n": 186,
+      "mean_gross_bps": 1.687421654619358,
+      "11.8": {
+        "mean_net_bps": -10.112578345380642,
+        "win_fraction": 0.26344086021505375,
+        "profit_factor": 0.44763114859090697,
+        "additive_drawdown_bps": 1943.2196042589303
+      },
+      "17.8": {
+        "mean_net_bps": -16.11257834538064,
+        "win_fraction": 0.21505376344086022,
+        "profit_factor": 0.29654522448933046,
+        "additive_drawdown_bps": 3044.3382396385323
+      },
+      "23.8": {
+        "mean_net_bps": -22.112578345380644,
+        "win_fraction": 0.16129032258064516,
+        "profit_factor": 0.20465889657861053,
+        "additive_drawdown_bps": 4148.338239638533
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -21.467394461195383,
+        -10.2801042048966
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "regime",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 1331,
+      "filtered": 1245,
+      "overlap": 7,
+      "censored": 0,
+      "n": 79,
+      "mean_gross_bps": -2.3962498006480097,
+      "11.8": {
+        "mean_net_bps": -14.19624980064801,
+        "win_fraction": 0.24050632911392406,
+        "profit_factor": 0.2692553132405688,
+        "additive_drawdown_bps": 1121.5037342511928
+      },
+      "17.8": {
+        "mean_net_bps": -20.19624980064801,
+        "win_fraction": 0.189873417721519,
+        "profit_factor": 0.16097814514053174,
+        "additive_drawdown_bps": 1595.5037342511926
+      },
+      "23.8": {
+        "mean_net_bps": -26.196249800648005,
+        "win_fraction": 0.1518987341772152,
+        "profit_factor": 0.09693393471767191,
+        "additive_drawdown_bps": 2069.503734251192
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -27.655278866524323,
+        -12.245995931172333
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "regime",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 640,
+      "filtered": 598,
+      "overlap": 2,
+      "censored": 0,
+      "n": 40,
+      "mean_gross_bps": 1.8870130833434646,
+      "11.8": {
+        "mean_net_bps": -9.912986916656537,
+        "win_fraction": 0.125,
+        "profit_factor": 0.34469328757912665,
+        "additive_drawdown_bps": 414.655957247364
+      },
+      "17.8": {
+        "mean_net_bps": -15.912986916656536,
+        "win_fraction": 0.125,
+        "profit_factor": 0.21908065306392646,
+        "additive_drawdown_bps": 642.655957247364
+      },
+      "23.8": {
+        "mean_net_bps": -21.912986916656536,
+        "win_fraction": 0.125,
+        "profit_factor": 0.14493404725056303,
+        "additive_drawdown_bps": 876.5194766662614
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -22.266413747613566,
+        -7.156528570102756
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "regime",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 29,
+      "filtered": 25,
+      "overlap": 0,
+      "censored": 0,
+      "n": 4,
+      "mean_gross_bps": 7.673111083092988,
+      "11.8": {
+        "mean_net_bps": -4.1268889169070135,
+        "win_fraction": 0.5,
+        "profit_factor": 0.45991186651840393,
+        "additive_drawdown_bps": 30.564559086337642
+      },
+      "17.8": {
+        "mean_net_bps": -10.126888916907014,
+        "win_fraction": 0.25,
+        "profit_factor": 0.07317411447531137,
+        "additive_drawdown_bps": 42.56455908633764
+      },
+      "23.8": {
+        "mean_net_bps": -16.126888916907014,
+        "win_fraction": 0.0,
+        "profit_factor": 0.0,
+        "additive_drawdown_bps": 64.50755566762805
+      }
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "session",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 2767,
+      "filtered": 2767,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "session",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 1331,
+      "filtered": 1331,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "session",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 640,
+      "filtered": 640,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "session",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 29,
+      "filtered": 29,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "both",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 2767,
+      "filtered": 2767,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "both",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 1331,
+      "filtered": 1331,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "both",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 640,
+      "filtered": 640,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "pullback",
+      "variant": "both",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 29,
+      "filtered": 29,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "baseline",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 1375,
+      "filtered": 0,
+      "overlap": 165,
+      "censored": 0,
+      "n": 1210,
+      "mean_gross_bps": -1.3264718439703411,
+      "11.8": {
+        "mean_net_bps": -13.126471843970341,
+        "win_fraction": 0.2735537190082645,
+        "profit_factor": 0.2958649665417654,
+        "additive_drawdown_bps": 15883.030931204106
+      },
+      "17.8": {
+        "mean_net_bps": -19.126471843970343,
+        "win_fraction": 0.19504132231404958,
+        "profit_factor": 0.17732990316541777,
+        "additive_drawdown_bps": 23143.030931204124
+      },
+      "23.8": {
+        "mean_net_bps": -25.126471843970343,
+        "win_fraction": 0.14214876033057852,
+        "profit_factor": 0.11022951050570846,
+        "additive_drawdown_bps": 30403.030931204146
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -20.86506747695219,
+        -17.46743224137471
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "baseline",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 657,
+      "filtered": 0,
+      "overlap": 78,
+      "censored": 0,
+      "n": 579,
+      "mean_gross_bps": -1.982327779080994,
+      "11.8": {
+        "mean_net_bps": -13.782327779080994,
+        "win_fraction": 0.2867012089810017,
+        "profit_factor": 0.27928004825931463,
+        "additive_drawdown_bps": 8060.938995816412
+      },
+      "17.8": {
+        "mean_net_bps": -19.782327779080994,
+        "win_fraction": 0.19343696027633853,
+        "profit_factor": 0.16580400319881872,
+        "additive_drawdown_bps": 11486.938995816408
+      },
+      "23.8": {
+        "mean_net_bps": -25.78232777908099,
+        "win_fraction": 0.14335060449050085,
+        "profit_factor": 0.10258293841353515,
+        "additive_drawdown_bps": 14934.722783086083
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -22.484147478168484,
+        -17.064588382503306
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "baseline",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 327,
+      "filtered": 0,
+      "overlap": 35,
+      "censored": 1,
+      "n": 291,
+      "mean_gross_bps": 0.29824243915953896,
+      "11.8": {
+        "mean_net_bps": -11.501757560840462,
+        "win_fraction": 0.25773195876288657,
+        "profit_factor": 0.2473261061612059,
+        "additive_drawdown_bps": 3347.011450204574
+      },
+      "17.8": {
+        "mean_net_bps": -17.501757560840463,
+        "win_fraction": 0.15120274914089346,
+        "profit_factor": 0.12769462355831118,
+        "additive_drawdown_bps": 5093.011450204573
+      },
+      "23.8": {
+        "mean_net_bps": -23.501757560840463,
+        "win_fraction": 0.10309278350515463,
+        "profit_factor": 0.07182823166549683,
+        "additive_drawdown_bps": 6839.011450204573
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -19.492461373910338,
+        -15.595951601000207
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "baseline",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 10,
+      "filtered": 0,
+      "overlap": 0,
+      "censored": 0,
+      "n": 10,
+      "mean_gross_bps": 10.057005195454716,
+      "11.8": {
+        "mean_net_bps": -1.7429948045452819,
+        "win_fraction": 0.3,
+        "profit_factor": 0.8747479155646078,
+        "additive_drawdown_bps": 133.7560300787495
+      },
+      "17.8": {
+        "mean_net_bps": -7.742994804545283,
+        "win_fraction": 0.2,
+        "profit_factor": 0.5849742612198209,
+        "additive_drawdown_bps": 175.7560300787495
+      },
+      "23.8": {
+        "mean_net_bps": -13.742994804545281,
+        "win_fraction": 0.2,
+        "profit_factor": 0.41411122429711167,
+        "additive_drawdown_bps": 217.7560300787495
+      }
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "regime",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 1375,
+      "filtered": 480,
+      "overlap": 81,
+      "censored": 0,
+      "n": 814,
+      "mean_gross_bps": -0.7637584983900433,
+      "11.8": {
+        "mean_net_bps": -12.563758498390044,
+        "win_fraction": 0.24815724815724816,
+        "profit_factor": 0.28069502388688394,
+        "additive_drawdown_bps": 10226.899417689487
+      },
+      "17.8": {
+        "mean_net_bps": -18.563758498390044,
+        "win_fraction": 0.1732186732186732,
+        "profit_factor": 0.16469326100672946,
+        "additive_drawdown_bps": 15110.899417689487
+      },
+      "23.8": {
+        "mean_net_bps": -24.563758498390044,
+        "win_fraction": 0.12776412776412777,
+        "profit_factor": 0.1011800548635923,
+        "additive_drawdown_bps": 19994.899417689503
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -20.566500776505613,
+        -16.50547905898345
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "regime",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 657,
+      "filtered": 223,
+      "overlap": 41,
+      "censored": 0,
+      "n": 393,
+      "mean_gross_bps": -1.427298806100744,
+      "11.8": {
+        "mean_net_bps": -13.227298806100745,
+        "win_fraction": 0.26717557251908397,
+        "profit_factor": 0.27495699405809076,
+        "additive_drawdown_bps": 5256.778154332557
+      },
+      "17.8": {
+        "mean_net_bps": -19.227298806100748,
+        "win_fraction": 0.18575063613231552,
+        "profit_factor": 0.15998026183255892,
+        "additive_drawdown_bps": 7578.778154332557
+      },
+      "23.8": {
+        "mean_net_bps": -25.22729880610074,
+        "win_fraction": 0.13231552162849872,
+        "profit_factor": 0.09745357483816436,
+        "additive_drawdown_bps": 9914.3284307976
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -22.520013906275455,
+        -15.838532306898458
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "regime",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 327,
+      "filtered": 104,
+      "overlap": 18,
+      "censored": 1,
+      "n": 204,
+      "mean_gross_bps": 0.083626793692143,
+      "11.8": {
+        "mean_net_bps": -11.716373206307859,
+        "win_fraction": 0.24509803921568626,
+        "profit_factor": 0.24265298011761077,
+        "additive_drawdown_bps": 2390.140134086803
+      },
+      "17.8": {
+        "mean_net_bps": -17.71637320630786,
+        "win_fraction": 0.12745098039215685,
+        "profit_factor": 0.13061356134777868,
+        "additive_drawdown_bps": 3614.1401340868033
+      },
+      "23.8": {
+        "mean_net_bps": -23.71637320630786,
+        "win_fraction": 0.09313725490196079,
+        "profit_factor": 0.07885318471681585,
+        "additive_drawdown_bps": 4838.140134086803
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -20.35444022745107,
+        -15.353985886651419
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "regime",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 10,
+      "filtered": 4,
+      "overlap": 0,
+      "censored": 0,
+      "n": 6,
+      "mean_gross_bps": -4.705652545124266,
+      "11.8": {
+        "mean_net_bps": -16.505652545124267,
+        "win_fraction": 0.16666666666666666,
+        "profit_factor": 0.005945511144089874,
+        "additive_drawdown_bps": 99.0339152707456
+      },
+      "17.8": {
+        "mean_net_bps": -22.505652545124267,
+        "win_fraction": 0.0,
+        "profit_factor": 0.0,
+        "additive_drawdown_bps": 135.0339152707456
+      },
+      "23.8": {
+        "mean_net_bps": -28.505652545124267,
+        "win_fraction": 0.0,
+        "profit_factor": 0.0,
+        "additive_drawdown_bps": 171.0339152707456
+      }
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "session",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 1375,
+      "filtered": 1375,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "session",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 657,
+      "filtered": 657,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "session",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 327,
+      "filtered": 327,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "session",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 10,
+      "filtered": 10,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "both",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 1375,
+      "filtered": 1375,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "both",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 657,
+      "filtered": 657,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "both",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 327,
+      "filtered": 327,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "reclaim",
+      "variant": "both",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 10,
+      "filtered": 10,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "baseline",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 860,
+      "filtered": 0,
+      "overlap": 118,
+      "censored": 0,
+      "n": 742,
+      "mean_gross_bps": 0.32366027608451975,
+      "11.8": {
+        "mean_net_bps": -11.476339723915482,
+        "win_fraction": 0.22776280323450135,
+        "profit_factor": 0.3827335715996221,
+        "additive_drawdown_bps": 8524.100094703244
+      },
+      "17.8": {
+        "mean_net_bps": -17.476339723915483,
+        "win_fraction": 0.1765498652291105,
+        "profit_factor": 0.2531287220806409,
+        "additive_drawdown_bps": 12970.100094703243
+      },
+      "23.8": {
+        "mean_net_bps": -23.47633972391548,
+        "win_fraction": 0.1347708894878706,
+        "profit_factor": 0.17550684654627952,
+        "additive_drawdown_bps": 17419.444075145293
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -20.12777593417238,
+        -15.147305701112886
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "baseline",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 433,
+      "filtered": 0,
+      "overlap": 67,
+      "censored": 0,
+      "n": 366,
+      "mean_gross_bps": 2.8037673039890882,
+      "11.8": {
+        "mean_net_bps": -8.996232696010912,
+        "win_fraction": 0.26229508196721313,
+        "profit_factor": 0.5122215974212475,
+        "additive_drawdown_bps": 3724.920231979072
+      },
+      "17.8": {
+        "mean_net_bps": -14.99623269601091,
+        "win_fraction": 0.2103825136612022,
+        "profit_factor": 0.3491979677667327,
+        "additive_drawdown_bps": 5590.920231979072
+      },
+      "23.8": {
+        "mean_net_bps": -20.996232696010914,
+        "win_fraction": 0.15027322404371585,
+        "profit_factor": 0.2499201299364152,
+        "additive_drawdown_bps": 7684.621166739997
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -19.20262880196968,
+        -10.105074557200378
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "baseline",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 216,
+      "filtered": 0,
+      "overlap": 31,
+      "censored": 1,
+      "n": 184,
+      "mean_gross_bps": -0.3488925241252803,
+      "11.8": {
+        "mean_net_bps": -12.148892524125282,
+        "win_fraction": 0.19021739130434784,
+        "profit_factor": 0.31580727888832066,
+        "additive_drawdown_bps": 2235.3962244390514
+      },
+      "17.8": {
+        "mean_net_bps": -18.14889252412528,
+        "win_fraction": 0.14130434782608695,
+        "profit_factor": 0.20366028931962576,
+        "additive_drawdown_bps": 3339.39622443905
+      },
+      "23.8": {
+        "mean_net_bps": -24.14889252412528,
+        "win_fraction": 0.10326086956521739,
+        "profit_factor": 0.14018039099929008,
+        "additive_drawdown_bps": 4443.3962244390505
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -22.12868691819042,
+        -13.233246026661451
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "baseline",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 9,
+      "filtered": 0,
+      "overlap": 1,
+      "censored": 0,
+      "n": 8,
+      "mean_gross_bps": 2.439029193623682,
+      "11.8": {
+        "mean_net_bps": -9.360970806376319,
+        "win_fraction": 0.5,
+        "profit_factor": 0.252429351568326,
+        "additive_drawdown_bps": 74.88776645101055
+      },
+      "17.8": {
+        "mean_net_bps": -15.360970806376319,
+        "win_fraction": 0.25,
+        "profit_factor": 0.06383271804434462,
+        "additive_drawdown_bps": 122.88776645101053
+      },
+      "23.8": {
+        "mean_net_bps": -21.36097080637632,
+        "win_fraction": 0.0,
+        "profit_factor": 0.0,
+        "additive_drawdown_bps": 170.88776645101052
+      }
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "regime",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 860,
+      "filtered": 697,
+      "overlap": 8,
+      "censored": 0,
+      "n": 155,
+      "mean_gross_bps": 2.595039348286776,
+      "11.8": {
+        "mean_net_bps": -9.204960651713225,
+        "win_fraction": 0.27741935483870966,
+        "profit_factor": 0.5266754126353839,
+        "additive_drawdown_bps": 1426.7689010155495
+      },
+      "17.8": {
+        "mean_net_bps": -15.204960651713225,
+        "win_fraction": 0.22580645161290322,
+        "profit_factor": 0.3655685502946608,
+        "additive_drawdown_bps": 2356.7689010155495
+      },
+      "23.8": {
+        "mean_net_bps": -21.204960651713225,
+        "win_fraction": 0.16774193548387098,
+        "profit_factor": 0.26322528990592015,
+        "additive_drawdown_bps": 3286.7689010155486
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -21.40428141335737,
+        -9.233632804076327
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "regime",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 433,
+      "filtered": 342,
+      "overlap": 12,
+      "censored": 0,
+      "n": 79,
+      "mean_gross_bps": 10.736037785628518,
+      "11.8": {
+        "mean_net_bps": -1.063962214371483,
+        "win_fraction": 0.3037974683544304,
+        "profit_factor": 0.9378984955897527,
+        "additive_drawdown_bps": 555.8656146484036
+      },
+      "17.8": {
+        "mean_net_bps": -7.063962214371483,
+        "win_fraction": 0.24050632911392406,
+        "profit_factor": 0.6711698958549345,
+        "additive_drawdown_bps": 933.8656146484036
+      },
+      "23.8": {
+        "mean_net_bps": -13.063962214371486,
+        "win_fraction": 0.20253164556962025,
+        "profit_factor": 0.500787343583573,
+        "additive_drawdown_bps": 1311.8656146484034
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -19.32804207185357,
+        8.05825309653049
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "regime",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 216,
+      "filtered": 170,
+      "overlap": 1,
+      "censored": 0,
+      "n": 45,
+      "mean_gross_bps": 4.433548369596134,
+      "11.8": {
+        "mean_net_bps": -7.366451630403867,
+        "win_fraction": 0.2222222222222222,
+        "profit_factor": 0.6850151207694594,
+        "additive_drawdown_bps": 446.9335051514255
+      },
+      "17.8": {
+        "mean_net_bps": -13.366451630403867,
+        "win_fraction": 0.17777777777777778,
+        "profit_factor": 0.5261091077290541,
+        "additive_drawdown_bps": 708.2075425506656
+      },
+      "23.8": {
+        "mean_net_bps": -19.366451630403866,
+        "win_fraction": 0.17777777777777778,
+        "profit_factor": 0.41560099893616986,
+        "additive_drawdown_bps": 972.2075425506658
+      },
+      "daily_bootstrap_mean_ci95_bps": [
+        -25.23558853901659,
+        4.045619122069891
+      ]
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "regime",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 9,
+      "filtered": 7,
+      "overlap": 0,
+      "censored": 0,
+      "n": 2,
+      "mean_gross_bps": 2.1890706581817465,
+      "11.8": {
+        "mean_net_bps": -9.610929341818254,
+        "win_fraction": 0.5,
+        "profit_factor": 0.2017745073818634,
+        "additive_drawdown_bps": 24.080737662975217
+      },
+      "17.8": {
+        "mean_net_bps": -15.610929341818254,
+        "win_fraction": 0.0,
+        "profit_factor": 0.0,
+        "additive_drawdown_bps": 31.22185868363651
+      },
+      "23.8": {
+        "mean_net_bps": -21.610929341818256,
+        "win_fraction": 0.0,
+        "profit_factor": 0.0,
+        "additive_drawdown_bps": 43.22185868363651
+      }
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "session",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 860,
+      "filtered": 860,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "session",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 433,
+      "filtered": 433,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "session",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 216,
+      "filtered": 216,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "session",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 9,
+      "filtered": 9,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "both",
+      "period": "train",
+      "allowed_session_cells": [],
+      "candidates": 860,
+      "filtered": 860,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "both",
+      "period": "validation",
+      "allowed_session_cells": [],
+      "candidates": 433,
+      "filtered": 433,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "both",
+      "period": "holdout",
+      "allowed_session_cells": [],
+      "candidates": 216,
+      "filtered": 216,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    },
+    {
+      "symbol": "ETHUSD",
+      "family": "compression",
+      "variant": "both",
+      "period": "diagnostic",
+      "allowed_session_cells": [],
+      "candidates": 9,
+      "filtered": 9,
+      "overlap": 0,
+      "censored": 0,
+      "n": 0
+    }
+  ],
+  "coverage": {
+    "BTCUSD": {
+      "calendar_bars": 70272,
+      "observed_five_minute_bars": 67823,
+      "missing_or_partial_bars": 2449
+    },
+    "ETHUSD": {
+      "calendar_bars": 70272,
+      "observed_five_minute_bars": 59163,
+      "missing_or_partial_bars": 11109
+    }
+  }
+}

@@ -101,6 +101,23 @@ def test_heartbeat_never_invokes_book_callback() -> None:
     assert client.last_book_at is None
 
 
+def test_system_status_subscription_has_no_symbols_and_never_watermarks_tape():
+    client = DeltaPublicWsClient(["BTCUSD"], channels=("trades", "system_status"))
+    channels = client._subscribe_msg()["payload"]["channels"]
+    assert channels == [
+        {"name": "trades", "symbols": ["BTCUSD"]},
+        {"name": "system_status"},
+    ]
+    client._handle({
+        "type": "system_status", "event": "snapshot", "status": "maintenance",
+        "timestamp": 1_775_037_882_675_402,
+    })
+    assert client.system_status == "maintenance"
+    assert client.system_status_at is not None
+    assert client.last_trade_at is None
+    assert client.last_book_at is None
+
+
 def test_handle_all_trades_taker_side():
     client = DeltaPublicWsClient(["BTCUSD"])
     seen = []

@@ -1,0 +1,156 @@
+{
+  "scanner": "ST4H",
+  "source": "Delta India official 4h OHLC; source receipts in this directory",
+  "can_trade": false,
+  "funding_included": false,
+  "missing_bars": 0,
+  "code_sha256": "da7746bb62a2b0c4edb710fc1678fe3bffdb34312e7670b7b407eaf37496241a",
+  "contract_sha256": "d0b8a50ccc7a678d67642c09edceb7ae5d674bbc386d77dc1a1045e0c73f7345",
+  "data_sha256": "611aae622e1631a1dcab6219acd7e8c0d526a67cbdfeee1a09971d928a7f83e7",
+  "results": [
+    {
+      "scanner": "ST4H",
+      "atr_kind": "wilder",
+      "start": "2025-01-01T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 45,
+        "win_rate": 0.4222222222222222,
+        "pf": 0.7359847305059026,
+        "net": -312.82373383596905,
+        "gross": -259.4719391134375,
+        "realized_dd": 596.629866281005
+      },
+      "open_position": {
+        "side": 1,
+        "entry": 80696.5,
+        "stop": 76992.08319382559,
+        "target": 84400.91680617441,
+        "qty": 0.012392111182021525,
+        "entry_ts": "2026-09-18T16:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "full"
+    },
+    {
+      "scanner": "ST4H",
+      "atr_kind": "wilder",
+      "start": "2026-06-22T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 6,
+        "win_rate": 0.16666666666666666,
+        "pf": 0.2135281879727016,
+        "net": -146.0944798276347,
+        "gross": -138.96220131536612,
+        "realized_dd": 146.0944798276347
+      },
+      "open_position": {
+        "side": 1,
+        "entry": 80696.5,
+        "stop": 76992.08319382559,
+        "target": 84400.91680617441,
+        "qty": 0.012392111182021525,
+        "entry_ts": "2026-09-18T16:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "90d"
+    },
+    {
+      "scanner": "ST4H",
+      "atr_kind": "wilder",
+      "start": "2026-09-06T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 1,
+        "win_rate": 0.0,
+        "pf": 0.0,
+        "net": -30.459416848999577,
+        "gross": -29.283963804965737,
+        "realized_dd": 30.459416848999577
+      },
+      "open_position": {
+        "side": 1,
+        "entry": 80696.5,
+        "stop": 76992.08319382559,
+        "target": 84400.91680617441,
+        "qty": 0.012392111182021525,
+        "entry_ts": "2026-09-18T16:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "14d"
+    },
+    {
+      "scanner": "ST4H",
+      "atr_kind": "sma",
+      "start": "2025-01-01T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 42,
+        "win_rate": 0.4523809523809524,
+        "pf": 0.754261945020927,
+        "net": -252.80736458199976,
+        "gross": -203.05133287603724,
+        "realized_dd": 467.2867074897664
+      },
+      "open_position": {
+        "side": 1,
+        "entry": 80696.5,
+        "stop": 77010.51785714286,
+        "target": 84382.48214285714,
+        "qty": 0.012392111182021525,
+        "entry_ts": "2026-09-18T16:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "full"
+    },
+    {
+      "scanner": "ST4H",
+      "atr_kind": "sma",
+      "start": "2026-06-22T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 5,
+        "win_rate": 0.4,
+        "pf": 0.5504570042046149,
+        "net": -48.60637325422351,
+        "gross": -42.59213661026833,
+        "realized_dd": 48.60637325422351
+      },
+      "open_position": {
+        "side": 1,
+        "entry": 80696.5,
+        "stop": 77010.51785714286,
+        "target": 84382.48214285714,
+        "qty": 0.012392111182021525,
+        "entry_ts": "2026-09-18T16:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "90d"
+    },
+    {
+      "scanner": "ST4H",
+      "atr_kind": "sma",
+      "start": "2026-09-06T00:00:00+00:00",
+      "end_exclusive": "2026-09-20T00:00:00+00:00",
+      "metrics": {
+        "n": 2,
+        "win_rate": 0.5,
+        "pf": 0.7937132380545263,
+        "net": -5.25654891886478,
+        "gross": -2.8980934983553794,
+        "realized_dd": 25.481755926995483
+      },
+      "open_position": {
+        "side": 1,
+        "entry": 80696.5,
+        "stop": 77010.51785714286,
+        "target": 84382.48214285714,
+        "qty": 0.012392111182021525,
+        "entry_ts": "2026-09-18T16:00:00+00:00"
+      },
+      "unresolved": false,
+      "window": "14d"
+    }
+  ]
+}

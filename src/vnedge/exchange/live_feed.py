@@ -743,6 +743,7 @@ class DeltaWsFeed(RestPollingMarketFeed):
             channels += ("ob_l2",)
         if enable_funding:
             channels += ("funding_rate",)
+        channels += ("system_status",)
         self._ws = DeltaPublicWsClient(
             [self._native_symbol],
             channels=channels,
@@ -920,6 +921,15 @@ class DeltaWsFeed(RestPollingMarketFeed):
 
     def market_state(self) -> MarketState:
         state = super().market_state()
+        venue_status = self._ws.system_status
+        if venue_status != "live":
+            return replace(
+                state,
+                exchange_healthy=False,
+                data_degraded=True,
+                data_quality="degraded",
+                data_quality_reason=f"delta system_status {venue_status or 'unreported'}",
+            )
         status = self._ws.heartbeat_status()
         if status in {
             HeartbeatStatus.PONG_TIMEOUT,
